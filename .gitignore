@@ -1,0 +1,55 @@
+# Dependencias
+node_modules/
+vendor/
+
+# Archivos de compilación / build
+dist/
+build/
+out/
+
+# Archivos temporales
+*.log
+*.tmp
+*.temp
+*.swp
+*.swo
+
+# Cachés
+.cache/
+.npm/
+.yarn/
+.pnpm-store/
+
+# IDEs y editores
+.vscode/
+.idea/
+*.iml
+
+# Sistemas operativos
+.DS_Store
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# Coverage / tests
+coverage/
+.nyc_output/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+
+# Java
+*.class
+*.jar
+*.war
+
+# Logs
+logs/
+*.log
+
+# Archivos generados automáticamente
+*.lock
