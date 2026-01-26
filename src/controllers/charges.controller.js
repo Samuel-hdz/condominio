@@ -9,7 +9,7 @@ import { catchAsync } from '../middlewares/errorHandler.js';
 import NotificationService from '../libs/notifications.js';
 import Utils from '../libs/utils.js';
 import mongoose from 'mongoose';
-
+import { CuentaBancaria } from '../models/cuentaBancaria.model.js';
 export const chargesController = {
     /**
      * Crear nuevo cargo (mantenimiento, extraordinario, multa)
@@ -936,7 +936,6 @@ export const chargesController = {
         return errors;
     },
 
-
     /**
      * Helper: Añadir período a una fecha
      */
@@ -954,229 +953,416 @@ export const chargesController = {
     },
 
     /**
- * Aplicar saldo a favor a cargos pendientes
- */
-applySaldoFavor: catchAsync(async (req, res) => {
-    const { domicilio_id } = req.params;
-    const { cargo_ids = [] } = req.body; // Opcional: aplicar a cargos específicos
+     * Aplicar saldo a favor a cargos pendientes
+     */
+    applySaldoFavor: catchAsync(async (req, res) => {
+        const { domicilio_id } = req.params;
+        const { cargo_ids = [] } = req.body; // Opcional: aplicar a cargos específicos
 
-    // Verificar si hay saldo a favor
-    const saldoDomicilio = await SaldoDomicilio.findOne({
-        domicilio_id
-    });
-
-    if (!saldoDomicilio || saldoDomicilio.saldo_favor <= 0) {
-        return res.status(400).json({
-            success: false,
-            message: 'No hay saldo a favor disponible'
+        // Verificar si hay saldo a favor
+        const saldoDomicilio = await SaldoDomicilio.findOne({
+            domicilio_id
         });
-    }
 
-    const session = await mongoose.startSession();
-    session.startTransaction();
-
-    try {
-        // Construir query para cargos pendientes
-        const query = {
-            domicilio_id,
-            saldo_pendiente: { $gt: 0 },
-            estatus: { $in: ['pendiente', 'vencido'] }
-        };
-
-        if (cargo_ids.length > 0) {
-            query._id = { $in: cargo_ids };
-        }
-
-        // Obtener cargos ordenados por antigüedad (más viejos primero)
-        const cargosPendientes = await CargoDomicilio.find(query)
-            .populate('cargo_id', 'fecha_vencimiento')
-            .sort({ 'cargo_id.fecha_vencimiento': 1 })
-            .session(session);
-
-        let saldoRestante = saldoDomicilio.saldo_favor;
-        const aplicaciones = [];
-
-        for (const cargoDom of cargosPendientes) {
-            if (saldoRestante <= 0) break;
-
-            const montoAAplicar = Math.min(saldoRestante, cargoDom.saldo_pendiente);
-
-            // Crear "pago aplicado" especial para saldo a favor
-            const pagoAplicado = await PagoAplicado.create([{
-                comprobante_id: null, // Sin comprobante porque es saldo a favor
-                cargo_domicilio_id: cargoDom._id,
-                monto_aplicado: montoAAplicar,
-                tipo_asignacion: 'saldo_favor',
-                usuario_asignador_id: req.userId,
-                notas: 'Aplicación de saldo a favor'
-            }], { session });
-
-            // Actualizar cargo domicilio
-            cargoDom.saldo_pendiente -= montoAAplicar;
-            if (cargoDom.saldo_pendiente <= 0) {
-                cargoDom.estatus = 'pagado';
-                cargoDom.fecha_pago = new Date();
-            }
-            await cargoDom.save({ session });
-
-            saldoRestante -= montoAAplicar;
-            aplicaciones.push({
-                cargo_id: cargoDom.cargo_id,
-                monto_aplicado: montoAAplicado,
-                nuevo_saldo: cargoDom.saldo_pendiente
+        if (!saldoDomicilio || saldoDomicilio.saldo_favor <= 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'No hay saldo a favor disponible'
             });
         }
 
-        // Actualizar saldo a favor
-        saldoDomicilio.saldo_favor = saldoRestante;
-        if (saldoRestante === 0) {
-            saldoDomicilio.notas = `Saldo aplicado completamente el ${new Date().toLocaleDateString()}`;
-        } else {
-            saldoDomicilio.notas = `Parcialmente aplicado. Restante: ${Utils.formatCurrency(saldoRestante)}`;
-        }
-        await saldoDomicilio.save({ session });
+        const session = await mongoose.startSession();
+        session.startTransaction();
 
-        await session.commitTransaction();
+        try {
+            // Construir query para cargos pendientes
+            const query = {
+                domicilio_id,
+                saldo_pendiente: { $gt: 0 },
+                estatus: { $in: ['pendiente', 'vencido'] }
+            };
 
-        // Notificar al residente si se aplicó algún saldo
-        if (aplicaciones.length > 0) {
-            const residente = await Residente.findOne({ domicilio_id })
-                .populate('user_id');
-            
-            if (residente && residente.user_id) {
-                await NotificationService.sendNotification({
-                    userId: residente.user_id._id,
-                    tipo: 'push',
-                    titulo: '💰 Saldo a favor aplicado',
-                    mensaje: `Se aplicó saldo a favor a ${aplicaciones.length} de tus cargos pendientes`,
-                    data: {
-                        tipo: 'saldo_favor',
-                        action: 'applied',
-                        aplicaciones: aplicaciones.length,
-                        total_aplicado: saldoDomicilio.saldo_favor - saldoRestante,
-                        saldo_restante: saldoRestante
-                    }
+            if (cargo_ids.length > 0) {
+                query._id = { $in: cargo_ids };
+            }
+
+            // Obtener cargos ordenados por antigüedad (más viejos primero)
+            const cargosPendientes = await CargoDomicilio.find(query)
+                .populate('cargo_id', 'fecha_vencimiento')
+                .sort({ 'cargo_id.fecha_vencimiento': 1 })
+                .session(session);
+
+            let saldoRestante = saldoDomicilio.saldo_favor;
+            const aplicaciones = [];
+
+            for (const cargoDom of cargosPendientes) {
+                if (saldoRestante <= 0) break;
+
+                const montoAAplicar = Math.min(saldoRestante, cargoDom.saldo_pendiente);
+
+                // Crear "pago aplicado" especial para saldo a favor
+                const pagoAplicado = await PagoAplicado.create([{
+                    comprobante_id: null, // Sin comprobante porque es saldo a favor
+                    cargo_domicilio_id: cargoDom._id,
+                    monto_aplicado: montoAAplicar,
+                    tipo_asignacion: 'saldo_favor',
+                    usuario_asignador_id: req.userId,
+                    notas: 'Aplicación de saldo a favor'
+                }], { session });
+
+                // Actualizar cargo domicilio
+                cargoDom.saldo_pendiente -= montoAAplicar;
+                if (cargoDom.saldo_pendiente <= 0) {
+                    cargoDom.estatus = 'pagado';
+                    cargoDom.fecha_pago = new Date();
+                }
+                await cargoDom.save({ session });
+
+                saldoRestante -= montoAAplicar;
+                aplicaciones.push({
+                    cargo_id: cargoDom.cargo_id,
+                    monto_aplicado: montoAAplicado,
+                    nuevo_saldo: cargoDom.saldo_pendiente
                 });
             }
-        }
 
-        res.json({
-            success: true,
-            message: `Saldo a favor aplicado exitosamente`,
-            resultado: {
-                saldo_inicial: saldoDomicilio.saldo_favor + (saldoDomicilio.saldo_favor - saldoRestante),
-                saldo_aplicado: saldoDomicilio.saldo_favor - saldoRestante,
-                saldo_restante: saldoRestante,
-                cargos_afectados: aplicaciones.length,
-                aplicaciones
+            // Actualizar saldo a favor
+            saldoDomicilio.saldo_favor = saldoRestante;
+            if (saldoRestante === 0) {
+                saldoDomicilio.notas = `Saldo aplicado completamente el ${new Date().toLocaleDateString()}`;
+            } else {
+                saldoDomicilio.notas = `Parcialmente aplicado. Restante: ${Utils.formatCurrency(saldoRestante)}`;
             }
-        });
+            await saldoDomicilio.save({ session });
 
-    } catch (error) {
-        await session.abortTransaction();
-        throw error;
-    } finally {
-        session.endSession();
-    }
-}),
+            await session.commitTransaction();
 
-/**
- * Transferir saldo a favor entre domicilios (solo administrador)
- */
-transferSaldoFavor: catchAsync(async (req, res) => {
-    const { 
-        domicilio_origen_id, 
-        domicilio_destino_id, 
-        monto, 
-        motivo 
-    } = req.body;
-
-    if (domicilio_origen_id === domicilio_destino_id) {
-        return res.status(400).json({
-            success: false,
-            message: 'No se puede transferir saldo al mismo domicilio'
-        });
-    }
-
-    if (parseFloat(monto) <= 0) {
-        return res.status(400).json({
-            success: false,
-            message: 'El monto debe ser mayor a 0'
-        });
-    }
-
-    const session = await mongoose.startSession();
-    session.startTransaction();
-
-    try {
-        // Verificar saldo disponible en origen
-        const saldoOrigen = await SaldoDomicilio.findOne({
-            domicilio_id: domicilio_origen_id
-        }).session(session);
-
-        if (!saldoOrigen || saldoOrigen.saldo_favor < parseFloat(monto)) {
-            throw new Error('Saldo insuficiente en domicilio de origen');
-        }
-
-        // Debitar saldo de origen
-        saldoOrigen.saldo_favor -= parseFloat(monto);
-        saldoOrigen.notas = `Transferido ${Utils.formatCurrency(monto)} a domicilio ${domicilio_destino_id}. Motivo: ${motivo || 'Sin motivo especificado'}`;
-        await saldoOrigen.save({ session });
-
-        // Acreditar saldo a destino
-        const saldoDestino = await SaldoDomicilio.findOneAndUpdate(
-            { domicilio_id: domicilio_destino_id },
-            { 
-                $inc: { saldo_favor: parseFloat(monto) },
-                $set: { 
-                    notas: `Recibido ${Utils.formatCurrency(monto)} de domicilio ${domicilio_origen_id}. Motivo: ${motivo || 'Sin motivo especificado'}` 
+            // Notificar al residente si se aplicó algún saldo
+            if (aplicaciones.length > 0) {
+                const residente = await Residente.findOne({ domicilio_id })
+                    .populate('user_id');
+                
+                if (residente && residente.user_id) {
+                    await NotificationService.sendNotification({
+                        userId: residente.user_id._id,
+                        tipo: 'push',
+                        titulo: '💰 Saldo a favor aplicado',
+                        mensaje: `Se aplicó saldo a favor a ${aplicaciones.length} de tus cargos pendientes`,
+                        data: {
+                            tipo: 'saldo_favor',
+                            action: 'applied',
+                            aplicaciones: aplicaciones.length,
+                            total_aplicado: saldoDomicilio.saldo_favor - saldoRestante,
+                            saldo_restante: saldoRestante
+                        }
+                    });
                 }
-            },
-            { upsert: true, new: true, session }
-        );
-
-        // Registrar auditoría de la transferencia
-        await mongoose.model('AuditoriaGeneral').create([{
-            usuario_id: req.userId,
-            accion: 'transferencia_saldo_favor',
-            modulo: 'finanzas',
-            detalles: {
-                domicilio_origen: domicilio_origen_id,
-                domicilio_destino: domicilio_destino_id,
-                monto: parseFloat(monto),
-                motivo,
-                saldo_origen_despues: saldoOrigen.saldo_favor,
-                saldo_destino_despues: saldoDestino.saldo_favor
             }
-        }], { session });
 
-        await session.commitTransaction();
+            res.json({
+                success: true,
+                message: `Saldo a favor aplicado exitosamente`,
+                resultado: {
+                    saldo_inicial: saldoDomicilio.saldo_favor + (saldoDomicilio.saldo_favor - saldoRestante),
+                    saldo_aplicado: saldoDomicilio.saldo_favor - saldoRestante,
+                    saldo_restante: saldoRestante,
+                    cargos_afectados: aplicaciones.length,
+                    aplicaciones
+                }
+            });
 
-        res.json({
-            success: true,
-            message: 'Transferencia de saldo completada exitosamente',
-            transferencia: {
-                origen: {
-                    domicilio_id: domicilio_origen_id,
-                    saldo_antes: saldoOrigen.saldo_favor + parseFloat(monto),
-                    saldo_despues: saldoOrigen.saldo_favor
-                },
-                destino: {
-                    domicilio_id: domicilio_destino_id,
-                    saldo_antes: saldoDestino.saldo_favor - parseFloat(monto),
-                    saldo_despues: saldoDestino.saldo_favor
-                },
-                monto: parseFloat(monto),
-                motivo,
-                fecha: new Date()
+        } catch (error) {
+            await session.abortTransaction();
+            throw error;
+        } finally {
+            session.endSession();
+        }
+    }),
+
+    /**
+     * Transferir saldo a favor entre domicilios (solo administrador)
+     */
+    transferSaldoFavor: catchAsync(async (req, res) => {
+        const { 
+            domicilio_origen_id, 
+            domicilio_destino_id, 
+            monto, 
+            motivo 
+        } = req.body;
+
+        if (domicilio_origen_id === domicilio_destino_id) {
+            return res.status(400).json({
+                success: false,
+                message: 'No se puede transferir saldo al mismo domicilio'
+            });
+        }
+
+        if (parseFloat(monto) <= 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'El monto debe ser mayor a 0'
+            });
+        }
+
+        const session = await mongoose.startSession();
+        session.startTransaction();
+
+        try {
+            // Verificar saldo disponible en origen
+            const saldoOrigen = await SaldoDomicilio.findOne({
+                domicilio_id: domicilio_origen_id
+            }).session(session);
+
+            if (!saldoOrigen || saldoOrigen.saldo_favor < parseFloat(monto)) {
+                throw new Error('Saldo insuficiente en domicilio de origen');
             }
-        });
 
-    } catch (error) {
-        await session.abortTransaction();
-        throw error;
-    } finally {
-        session.endSession();
-    }
-})
+            // Debitar saldo de origen
+            saldoOrigen.saldo_favor -= parseFloat(monto);
+            saldoOrigen.notas = `Transferido ${Utils.formatCurrency(monto)} a domicilio ${domicilio_destino_id}. Motivo: ${motivo || 'Sin motivo especificado'}`;
+            await saldoOrigen.save({ session });
+
+            // Acreditar saldo a destino
+            const saldoDestino = await SaldoDomicilio.findOneAndUpdate(
+                { domicilio_id: domicilio_destino_id },
+                { 
+                    $inc: { saldo_favor: parseFloat(monto) },
+                    $set: { 
+                        notas: `Recibido ${Utils.formatCurrency(monto)} de domicilio ${domicilio_origen_id}. Motivo: ${motivo || 'Sin motivo especificado'}` 
+                    }
+                },
+                { upsert: true, new: true, session }
+            );
+
+            // Registrar auditoría de la transferencia
+            await mongoose.model('AuditoriaGeneral').create([{
+                usuario_id: req.userId,
+                accion: 'transferencia_saldo_favor',
+                modulo: 'finanzas',
+                detalles: {
+                    domicilio_origen: domicilio_origen_id,
+                    domicilio_destino: domicilio_destino_id,
+                    monto: parseFloat(monto),
+                    motivo,
+                    saldo_origen_despues: saldoOrigen.saldo_favor,
+                    saldo_destino_despues: saldoDestino.saldo_favor
+                }
+            }], { session });
+
+            await session.commitTransaction();
+
+            res.json({
+                success: true,
+                message: 'Transferencia de saldo completada exitosamente',
+                transferencia: {
+                    origen: {
+                        domicilio_id: domicilio_origen_id,
+                        saldo_antes: saldoOrigen.saldo_favor + parseFloat(monto),
+                        saldo_despues: saldoOrigen.saldo_favor
+                    },
+                    destino: {
+                        domicilio_id: domicilio_destino_id,
+                        saldo_antes: saldoDestino.saldo_favor - parseFloat(monto),
+                        saldo_despues: saldoDestino.saldo_favor
+                    },
+                    monto: parseFloat(monto),
+                    motivo,
+                    fecha: new Date()
+                }
+            });
+
+        } catch (error) {
+            await session.abortTransaction();
+            throw error;
+        } finally {
+            session.endSession();
+        }
+    }),
+
+    modificarCargo: catchAsync(async (req, res) => {
+        try {
+            const { id } = req.params;
+            const { 
+                nombre, 
+                descripcion, 
+                monto_base, 
+                fecha_vencimiento,
+                descuentos 
+            } = req.body;
+
+            const cargo = await Cargo.findById(id);
+            if (!cargo) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Cargo no encontrado'
+                });
+            }
+
+            // Verificar si se puede modificar
+            if (cargo.estatus === 'cancelado') {
+                return res.status(400).json({
+                    success: false,
+                    message: 'No se puede modificar un cargo cancelado'
+                });
+            }
+
+            // Guardar valores originales para auditoría
+            const originalValues = {
+                nombre: cargo.nombre,
+                monto_base: cargo.monto_base,
+                fecha_vencimiento: cargo.fecha_vencimiento
+            };
+
+            // Actualizar campos
+            if (nombre) cargo.nombre = nombre;
+            if (descripcion !== undefined) cargo.descripcion = descripcion;
+            
+            if (monto_base && parseFloat(monto_base) !== cargo.monto_base) {
+                const diferencia = parseFloat(monto_base) - cargo.monto_base;
+                cargo.monto_base = parseFloat(monto_base);
+                cargo.monto_total = parseFloat(monto_base);
+                
+                // Actualizar todos los CargoDomicilio relacionados
+                await CargoDomicilio.updateMany(
+                    { cargo_id: id },
+                    { 
+                        $inc: { 
+                            monto: diferencia,
+                            monto_final: diferencia,
+                            saldo_pendiente: diferencia
+                        }
+                    }
+                );
+            }
+
+            if (fecha_vencimiento) {
+                cargo.fecha_vencimiento = new Date(fecha_vencimiento);
+            }
+
+            await cargo.save();
+
+            // Aplicar descuentos si se proporcionan
+            if (descuentos && descuentos.length > 0) {
+                // Eliminar descuentos anteriores
+                await Descuento.deleteMany({
+                    cargo_domicilio_id: {
+                        $in: (await CargoDomicilio.find({ cargo_id: id })).map(cd => cd._id)
+                    }
+                });
+
+                // Aplicar nuevos descuentos
+                const cargosDomicilio = await CargoDomicilio.find({ cargo_id: id });
+                for (const cargoDom of cargosDomicilio) {
+                    for (const desc of descuentos) {
+                        await Descuento.create({
+                            cargo_domicilio_id: cargoDom._id,
+                            tipo_descuento: desc.tipo_descuento,
+                            nombre_descuento: desc.nombre_descuento,
+                            valor: desc.valor,
+                            motivo: desc.motivo,
+                            usuario_aplicador_id: req.userId
+                        });
+
+                        // Recalcular monto final
+                        if (desc.tipo_descuento === 'porcentaje') {
+                            cargoDom.porcentaje_descuento += parseFloat(desc.valor);
+                        } else {
+                            cargoDom.monto_descuento += parseFloat(desc.valor);
+                        }
+                    }
+                    await cargoDom.save();
+                }
+            }
+
+            res.json({
+                success: true,
+                message: 'Cargo modificado exitosamente',
+                cargo: {
+                    id: cargo._id,
+                    nombre: cargo.nombre,
+                    monto_base: cargo.monto_base,
+                    fecha_vencimiento: cargo.fecha_vencimiento,
+                    cambios: Object.keys(originalValues).filter(key => 
+                        originalValues[key] !== cargo[key]
+                    )
+                }
+            });
+
+        } catch (error) {
+            console.error('Error modificando cargo:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Error al modificar cargo',
+                error: error.message
+            });
+        }
+    }),
+
+    getCuentasBancarias: catchAsync(async (req, res) => {
+            try {
+                const cuentas = await CuentaBancaria.find({ activa: true })
+                    .sort({ created_at: -1 });
+    
+                res.json({
+                    success: true,
+                    cuentas
+                });
+            } catch (error) {
+                res.status(500).json({
+                    success: false,
+                    message: 'Error obteniendo cuentas bancarias',
+                    error: error.message
+                });
+            }
+    }),
+
+    crearCuentaBancaria: catchAsync(async (req, res) => {
+            try {
+                const {
+                    titulo,
+                    numero_cuenta,
+                    institucion,
+                    clabe,
+                    swift_code,
+                    tipo_cuenta = 'cheques',
+                    moneda = 'MXN'
+                } = req.body;
+    
+                // Validar que no exista una cuenta con el mismo número en la misma institución
+                const cuentaExistente = await CuentaBancaria.findOne({
+                    institucion,
+                    numero_cuenta
+                });
+    
+                if (cuentaExistente) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Ya existe una cuenta con este número en esta institución'
+                    });
+                }
+    
+                const cuenta = await CuentaBancaria.create({
+                    titulo,
+                    numero_cuenta,
+                    institucion,
+                    clabe,
+                    swift_code,
+                    tipo_cuenta,
+                    moneda,
+                    activa: true
+                });
+    
+                res.status(201).json({
+                    success: true,
+                    message: 'Cuenta bancaria creada exitosamente',
+                    cuenta
+                });
+            } catch (error) {
+                res.status(500).json({
+                    success: false,
+                    message: 'Error creando cuenta bancaria',
+                    error: error.message
+                });
+            }
+    }),
 };

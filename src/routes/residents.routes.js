@@ -5,7 +5,7 @@ import {
     requireRole,
     requireResidentMobileAccess,
     requirePrincipalResident,
-    blockSuspendedResidents,  // 👈 NUEVO
+    blockSuspendedResidents,
     validateCreateResident,
     validateCreateUser,
     validateObjectId 

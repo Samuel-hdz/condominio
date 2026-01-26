@@ -5,11 +5,18 @@ import { authenticate, validateCreateUser } from '../middlewares/index.js';
 const router = Router();
 
 /**
- * @route   POST /api/auth/login
- * @desc    Login de usuario
+ * @route   POST /api/auth/login/mobile
+ * @desc    Login EXCLUSIVO para app móvil (solo residentes)
  * @access  Public
  */
-router.post('/login', authController.login);
+router.post('/login/mobile', authController.loginMobile);
+
+/**
+ * @route   POST /api/auth/login/web
+ * @desc    Login EXCLUSIVO para panel web (solo admin/caseta/comite)
+ * @access  Public
+ */
+router.post('/login/web', authController.loginWeb);
 
 /**
  * @route   POST /api/auth/logout
