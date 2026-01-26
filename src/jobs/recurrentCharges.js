@@ -257,9 +257,37 @@ class RecurrentChargesJob {
      * Calcular fecha de siguiente generación
      */
     static calculateNextGenerationDate(fechaVencimiento, periodicidad) {
-        // Para cargos recurrentes, la siguiente generación es igual a la fecha de vencimiento
-        return new Date(fechaVencimiento);
+    const fecha = new Date(fechaVencimiento);
+    
+    switch (periodicidad) {
+        case 'semanal':
+            fecha.setDate(fecha.getDate() + 7);
+            break;
+        case 'quincenal':
+            fecha.setDate(fecha.getDate() + 15);
+            break;
+        case 'mensual':
+            fecha.setMonth(fecha.getMonth() + 1);
+            break;
+        case 'bimestral':
+            fecha.setMonth(fecha.getMonth() + 2);
+            break;
+        case 'trimestral':
+            fecha.setMonth(fecha.getMonth() + 3);
+            break;
+        case 'semestral':
+            fecha.setMonth(fecha.getMonth() + 6);
+            break;
+        case 'anual':
+            fecha.setFullYear(fecha.getFullYear() + 1);
+            break;
+        default:
+            // Por defecto, generar al día siguiente de la fecha de vencimiento
+            fecha.setDate(fecha.getDate() + 1);
     }
+    
+    return fecha;
+}
 
     /**
      * Notificar a residentes sobre nuevo cargo recurrente

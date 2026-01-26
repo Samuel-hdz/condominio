@@ -5,29 +5,61 @@ const tipoCargoSchema = new mongoose.Schema({
         type: String,
         required: true,
         unique: true,
-        maxlength: 100
+        maxlength: 100,
+        trim: true
+    },
+    codigo: {
+        type: String,
+        unique: true,
+        maxlength: 20,
+        uppercase: true,
+        trim: true,
+        required: true
     },
     descripcion: {
         type: String,
-        maxlength: 200
+        maxlength: 500
     },
     tipo: {
         type: String,
         required: true,
         enum: ['mantenimiento', 'extraordinario', 'multa']
     },
-    recurrente: {
+    dias_vencimiento_sugerido: {
+        type: Number,
+        default: 30,
+        min: 1,
+        max: 365
+    },
+    monto_base_sugerido: {
+        type: Number,
+        min: 0,
+        default: 0
+    },    
+    categoria: {
+        type: String,
+        enum: ['ordinario', 'extraordinario', 'sancion', 'servicio', 'ajuste'],
+        default: 'ordinario'
+    },    
+    sugerir_recurrente: {
         type: Boolean,
         default: false
     },
-    periodicidad: {
+    periodicidad_sugerida: {
         type: String,
-        enum: ['semanal', 'quincenal', 'mensual', 'bimestral', 'trimestral', 'semestral', 'anual', null]
+        enum: ['semanal', 'quincenal', 'mensual', 'bimestral', 'trimestral', 'semestral', 'anual', null],
+        default: null
     },
-    dias_vencimiento: {
+    
+    activo: {
+        type: Boolean,
+        default: true
+    },
+    orden_prioridad: {
         type: Number,
-        default: 30,
-        min: 1
+        default: 1,
+        min: 1,
+        max: 10
     }
 }, {
     timestamps: true

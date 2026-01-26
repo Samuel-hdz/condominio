@@ -1,3 +1,4 @@
+// models/cargo.model.js - VERSIÓN ACTUALIZADA
 import mongoose from 'mongoose';
 
 const cargoSchema = new mongoose.Schema({
@@ -9,10 +10,12 @@ const cargoSchema = new mongoose.Schema({
     nombre: {
         type: String,
         required: true,
-        maxlength: 150
+        maxlength: 150,
+        trim: true
     },
     descripcion: {
-        type: String
+        type: String,
+        trim: true
     },
     monto_base: {
         type: Number,
@@ -32,13 +35,17 @@ const cargoSchema = new mongoose.Schema({
         type: Date,
         required: true
     },
+    
+    // ✅ AHORA CONFIGURADO POR ADMIN EN createCharge
     periodicidad: {
         type: String,
-        enum: ['semanal', 'quincenal', 'mensual', 'bimestral', 'trimestral', 'semestral', 'anual', null]
+        enum: ['semanal', 'quincenal', 'mensual', 'bimestral', 'trimestral', 'semestral', 'anual', null],
+        default: null
     },
     siguiente_generacion: {
         type: Date
     },
+    
     aplica_a: {
         type: String,
         enum: ['todos', 'domicilios', 'calles'],
@@ -53,6 +60,40 @@ const cargoSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
         required: true
+    },
+    
+    // ✅ NUEVO: Guardar configuración del admin para auditoría
+    configuracion_admin: {
+        decidio_recurrente: {
+            type: Boolean,
+            default: false
+        },
+        decidio_periodicidad: {
+            type: String,
+            enum: ['semanal', 'quincenal', 'mensual', 'bimestral', 'trimestral', 'semestral', 'anual', null],
+            default: null
+        },
+        notas: {
+            type: String,
+            maxlength: 500
+        },
+        fecha_configuracion: {
+            type: Date,
+            default: Date.now
+        }
+    },
+    
+    // Metadata adicional
+    metadata: {
+        version: {
+            type: Number,
+            default: 1
+        },
+        origen: {
+            type: String,
+            enum: ['manual', 'recurrente', 'duplicado'],
+            default: 'manual'
+        }
     }
 }, {
     timestamps: true
@@ -63,13 +104,28 @@ cargoSchema.index({ fecha_vencimiento: 1 });
 cargoSchema.index({ estatus: 1 });
 cargoSchema.index({ periodicidad: 1 });
 cargoSchema.index({ siguiente_generacion: 1 });
+cargoSchema.index({ 'configuracion_admin.decidio_recurrente': 1 });
 
-// Middleware para calcular monto_total
-cargoSchema.pre('save', function(next) {
+// Middleware para calcular monto_total si no existe
+cargoSchema.pre('save', async function() {
     if (!this.monto_total && this.monto_base) {
         this.monto_total = this.monto_base;
     }
-    next();
+    
+    // Auto-completar metadata si no existe
+    if (!this.metadata) {
+        this.metadata = {
+            version: 1,
+            origen: 'manual'
+        };
+    }
+    
+    // Si es recurrente, asegurar configuracion_admin
+    if (this.periodicidad && !this.configuracion_admin.decidio_recurrente) {
+        this.configuracion_admin.decidio_recurrente = true;
+        this.configuracion_admin.decidio_periodicidad = this.periodicidad;
+        this.configuracion_admin.fecha_configuracion = new Date();
+    }
 });
 
 export const Cargo = mongoose.model('Cargo', cargoSchema);

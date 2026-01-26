@@ -20,6 +20,14 @@ const proveedorSchema = new mongoose.Schema({
         type: String,
         maxlength: 100
     },
+    creado_por_residente_id: {  // 👈 NUEVO
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Residente'
+    },
+    es_global: {  // 👈 NUEVO
+        type: Boolean,
+        default: false  // true = todos pueden ver, false = solo el creador
+    },
     estatus: {
         type: String,
         enum: ['activo', 'inactivo'],
@@ -32,5 +40,7 @@ const proveedorSchema = new mongoose.Schema({
 // Índices
 proveedorSchema.index({ servicio: 1 });
 proveedorSchema.index({ estatus: 1 });
+proveedorSchema.index({ es_global: 1 });  // 👈 NUEVO
+proveedorSchema.index({ creado_por_residente_id: 1 });  // 👈 NUEVO
 
 export const Proveedor = mongoose.model('Proveedor', proveedorSchema);

@@ -19,6 +19,10 @@ const autorizacionVisitaSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Evento'
     },
+    personal_id: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Personal'
+    },
     nombre_visitante: {
         type: String,
         maxlength: 150
@@ -83,6 +87,11 @@ const autorizacionVisitaSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
         required: true
+    },
+    // NUEVO: Para eventos con QR compartido
+    es_acceso_evento: {
+        type: Boolean,
+        default: false
     }
 }, {
     timestamps: true
@@ -95,6 +104,7 @@ autorizacionVisitaSchema.index({ estado: 1 });
 autorizacionVisitaSchema.index({ fecha_fin_vigencia: 1 });
 autorizacionVisitaSchema.index({ evento_id: 1 });
 autorizacionVisitaSchema.index({ proveedor_id: 1 });
+autorizacionVisitaSchema.index({ personal_id: 1 }); // 👈 NUEVO ÍNDICE
 autorizacionVisitaSchema.index({ 
     residente_id: 1, 
     estado: 1, 
@@ -105,5 +115,21 @@ autorizacionVisitaSchema.index({
 autorizacionVisitaSchema.pre('save', async function() {
     this.ingresos_disponibles = this.limite_ingresos - this.ingresos_realizados;
 });
+
+// Método para verificar si está vigente
+autorizacionVisitaSchema.methods.estaVigente = function() {
+    const ahora = new Date();
+    return this.estado === 'activa' && 
+           ahora >= this.fecha_inicio_vigencia && 
+           ahora <= this.fecha_fin_vigencia;
+};
+
+// Método para verificar si puede ingresar
+autorizacionVisitaSchema.methods.puedeIngresar = function() {
+    if (this.estado !== 'activa') return false;
+    if (!this.estaVigente()) return false;
+    if (this.ingresos_disponibles <= 0) return false;
+    return true;
+};
 
 export const AutorizacionVisita = mongoose.model('AutorizacionVisita', autorizacionVisitaSchema);

@@ -14,25 +14,32 @@ class NotificationService {
      * @returns {Promise<Object>} Notificación creada
      */
     static async sendNotification(options) {
-        const {
-            userId,
-            tipo = 'in_app',
-            titulo,
-            mensaje,
-            data = {},
-            accionRequerida = false,
-            accionTipo = null,
-            accionData = null
-        } = options;
+    const {
+        userId,
+        tipo = 'in_app',
+        titulo,
+        mensaje,
+        data = {},
+        accionRequerida = false,
+        accionTipo = null,
+        accionData = null
+    } = options;
 
+    try {
         // Verificar preferencias del usuario
-        const pref = await UsuarioNotificacionPref.findOne({
-            user_id: userId,
-            tipo_notificacion: this.getNotificationTypeFromData(data)
-        });
+        let tipoFinal = tipo;
+        
+        if (tipo === 'push') {
+            const pref = await UsuarioNotificacionPref.findOne({
+                user_id: userId,
+                tipo_notificacion: this.getNotificationTypeFromData(data)
+            });
 
-        // Si el usuario tiene deshabilitadas las notificaciones push, cambiar a in_app
-        const tipoFinal = (tipo === 'push' && pref && !pref.recibir_push) ? 'in_app' : tipo;
+            // Si el usuario tiene deshabilitadas las notificaciones push, cambiar a in_app
+            if (pref && pref.recibir_push === false) {
+                tipoFinal = 'in_app';
+            }
+        }
 
         const notification = await Notificacion.create({
             user_id: userId,
@@ -53,7 +60,25 @@ class NotificationService {
         }
 
         return notification;
+        
+    } catch (error) {
+        console.error('Error enviando notificación:', error);
+        // En caso de error, crear notificación in_app como fallback
+        return await Notificacion.create({
+            user_id: userId,
+            tipo: 'in_app',
+            titulo,
+            mensaje,
+            data_json: data,
+            accion_requerida: accionRequerida,
+            accion_tipo: accionTipo,
+            accion_data: accionData,
+            enviada: true,
+            fecha_envio: new Date(),
+            error_en_push: error.message
+        });
     }
+}
 
     /**
      * Envía notificación push (placeholder para implementación real)

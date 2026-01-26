@@ -15,8 +15,19 @@ import {
     validateCreateCharge,
     validateCreateSurcharge
 } from '../middlewares/index.js';
+import Utils from '../libs/utils.js';
+
+import { SaldoDomicilio } from '../models/saldoDomicilio.model.js';
+import { AuditoriaGeneral } from '../models/auditoriaGeneral.model.js';
 import multer from 'multer';
 import path from 'path';
+import { Residente } from '../models/residente.model.js';
+import mongoose from 'mongoose';
+import { ComprobantePago } from '../models/comprobantePago.model.js';
+import { validateManualPayment } from '../middlewares/financeValidation.js';
+import { CargoDomicilio } from '../models/cargoDomicilio.model.js';
+import { PagoAplicado } from '../models/pagoAplicado.model.js';
+import NotificationService from '../libs/notifications.js';
 
 // Configurar multer para upload de archivos
 const storage = multer.diskStorage({
@@ -91,9 +102,35 @@ residentRoutes.get(
  * @desc    Asignar pago manualmente a cargos específicos
  * @access  Private (Residente)
  */
-residentRoutes.post(
-    '/assign-payment',
-    financesController.assignPaymentToCharges
+// residentRoutes.post(
+//     '/assign-payment',
+//     financesController.assignPaymentToCharges
+// );
+
+// SALDO A FAVOR - RESIDENTE
+/**
+ * @route   GET /api/finances/resident/saldo-favor
+ * @desc    Obtener saldo a favor del residente
+ * @access  Private (Residente)
+ */
+residentRoutes.get('/saldo-favor', async (req, res) => {
+    const residenteId = req.residenteId;
+    const residente = await Residente.findById(residenteId);
+    
+    const saldo = await SaldoDomicilio.findOne({
+        domicilio_id: residente.domicilio_id._id
+    }) || { saldo_favor: 0 };
+    
+    res.json({ success: true, saldo_favor: saldo.saldo_favor });
+});
+
+/**
+ * @route   POST /api/finances/resident/saldo-favor/aplicar
+ * @desc    Aplicar saldo a favor a cargos pendientes
+ * @access  Private (Residente)
+ */
+residentRoutes.post('/saldo-favor/aplicar', 
+    chargesController.applySaldoFavor
 );
 
 // ==================== RUTAS PÚBLICAS PARA TODOS ====================
@@ -373,5 +410,943 @@ router.use('/admin', adminRoutes);
 
 // Agregar rutas de residente
 router.use('/resident', residentRoutes);
+
+// ==================== NUEVOS ENDPOINTS SEGÚN ESPECIFICACIÓN ====================
+
+// -------------------- MODIFICAR CARGO --------------------
+/**
+ * @route   PUT /api/finances/admin/charges/:id/modify
+ * @desc    Modificar cargo existente
+ * @access  Private (Administrador)
+ */
+adminRoutes.put(
+    '/charges/:id/modify',
+    validateObjectId('id'),
+    requireRole('administrador'),
+    async (req, res) => {
+        try {
+            const { id } = req.params;
+            const { 
+                nombre, 
+                descripcion, 
+                monto_base, 
+                fecha_vencimiento,
+                descuentos 
+            } = req.body;
+
+            const cargo = await Cargo.findById(id);
+            if (!cargo) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Cargo no encontrado'
+                });
+            }
+
+            // Verificar si se puede modificar
+            if (cargo.estatus === 'cancelado') {
+                return res.status(400).json({
+                    success: false,
+                    message: 'No se puede modificar un cargo cancelado'
+                });
+            }
+
+            // Guardar valores originales para auditoría
+            const originalValues = {
+                nombre: cargo.nombre,
+                monto_base: cargo.monto_base,
+                fecha_vencimiento: cargo.fecha_vencimiento
+            };
+
+            // Actualizar campos
+            if (nombre) cargo.nombre = nombre;
+            if (descripcion !== undefined) cargo.descripcion = descripcion;
+            
+            if (monto_base && parseFloat(monto_base) !== cargo.monto_base) {
+                const diferencia = parseFloat(monto_base) - cargo.monto_base;
+                cargo.monto_base = parseFloat(monto_base);
+                cargo.monto_total = parseFloat(monto_base);
+                
+                // Actualizar todos los CargoDomicilio relacionados
+                await CargoDomicilio.updateMany(
+                    { cargo_id: id },
+                    { 
+                        $inc: { 
+                            monto: diferencia,
+                            monto_final: diferencia,
+                            saldo_pendiente: diferencia
+                        }
+                    }
+                );
+            }
+
+            if (fecha_vencimiento) {
+                cargo.fecha_vencimiento = new Date(fecha_vencimiento);
+            }
+
+            await cargo.save();
+
+            // Aplicar descuentos si se proporcionan
+            if (descuentos && descuentos.length > 0) {
+                // Eliminar descuentos anteriores
+                await Descuento.deleteMany({
+                    cargo_domicilio_id: {
+                        $in: (await CargoDomicilio.find({ cargo_id: id })).map(cd => cd._id)
+                    }
+                });
+
+                // Aplicar nuevos descuentos
+                const cargosDomicilio = await CargoDomicilio.find({ cargo_id: id });
+                for (const cargoDom of cargosDomicilio) {
+                    for (const desc of descuentos) {
+                        await Descuento.create({
+                            cargo_domicilio_id: cargoDom._id,
+                            tipo_descuento: desc.tipo_descuento,
+                            nombre_descuento: desc.nombre_descuento,
+                            valor: desc.valor,
+                            motivo: desc.motivo,
+                            usuario_aplicador_id: req.userId
+                        });
+
+                        // Recalcular monto final
+                        if (desc.tipo_descuento === 'porcentaje') {
+                            cargoDom.porcentaje_descuento += parseFloat(desc.valor);
+                        } else {
+                            cargoDom.monto_descuento += parseFloat(desc.valor);
+                        }
+                    }
+                    await cargoDom.save();
+                }
+            }
+
+            res.json({
+                success: true,
+                message: 'Cargo modificado exitosamente',
+                cargo: {
+                    id: cargo._id,
+                    nombre: cargo.nombre,
+                    monto_base: cargo.monto_base,
+                    fecha_vencimiento: cargo.fecha_vencimiento,
+                    cambios: Object.keys(originalValues).filter(key => 
+                        originalValues[key] !== cargo[key]
+                    )
+                }
+            });
+
+        } catch (error) {
+            console.error('Error modificando cargo:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Error al modificar cargo',
+                error: error.message
+            });
+        }
+    }
+);
+
+// -------------------- GESTIÓN DE CUENTAS BANCARIAS --------------------
+/**
+ * @route   GET /api/finances/admin/cuentas-pago
+ * @desc    Obtener todas las cuentas bancarias
+ * @access  Private (Administrador, Comité)
+ */
+adminRoutes.get(
+    '/cuentas-pago',
+    async (req, res) => {
+        try {
+            const cuentas = await CuentaBancaria.find({ activa: true })
+                .sort({ created_at: -1 });
+
+            res.json({
+                success: true,
+                cuentas
+            });
+        } catch (error) {
+            res.status(500).json({
+                success: false,
+                message: 'Error obteniendo cuentas bancarias',
+                error: error.message
+            });
+        }
+    }
+);
+
+/**
+ * @route   POST /api/finances/admin/cuentas-pago
+ * @desc    Crear nueva cuenta bancaria
+ * @access  Private (Administrador)
+ */
+adminRoutes.post(
+    '/cuentas-pago',
+    requireRole('administrador'),
+    async (req, res) => {
+        try {
+            const {
+                titulo,
+                numero_cuenta,
+                institucion,
+                clabe,
+                swift_code,
+                tipo_cuenta = 'cheques',
+                moneda = 'MXN'
+            } = req.body;
+
+            // Validar que no exista una cuenta con el mismo número en la misma institución
+            const cuentaExistente = await CuentaBancaria.findOne({
+                institucion,
+                numero_cuenta
+            });
+
+            if (cuentaExistente) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Ya existe una cuenta con este número en esta institución'
+                });
+            }
+
+            const cuenta = await CuentaBancaria.create({
+                titulo,
+                numero_cuenta,
+                institucion,
+                clabe,
+                swift_code,
+                tipo_cuenta,
+                moneda,
+                activa: true
+            });
+
+            res.status(201).json({
+                success: true,
+                message: 'Cuenta bancaria creada exitosamente',
+                cuenta
+            });
+        } catch (error) {
+            res.status(500).json({
+                success: false,
+                message: 'Error creando cuenta bancaria',
+                error: error.message
+            });
+        }
+    }
+);
+
+// -------------------- REGISTRO MANUAL DE PAGO POR ADMIN --------------------
+/**
+ * @route   POST /api/finances/admin/recaudacion/nuevo-pago
+ * @desc    Registrar pago manualmente (cuando el residente paga al administrador)
+ * @access  Private (Administrador)
+ */
+adminRoutes.post(
+    '/recaudacion/nuevo-pago',
+    requireRole('administrador'),
+    upload.single('comprobante'),
+    validateManualPayment,
+    async (req, res) => {
+        console.log('🚀 INICIANDO NUEVO PAGO MANUAL');
+        console.log('📦 Body recibido:', JSON.stringify(req.body, null, 2));
+        
+        const {
+            residente_id,
+            monto,
+            fecha_pago,
+            metodo_pago,
+            institucion_bancaria,
+            numero_referencia,
+            cuenta_destino,
+            asignaciones = [],
+            observaciones
+        } = req.body;
+
+        console.log(`👤 Residente ID: ${residente_id}`);
+        console.log(`💰 Monto total: ${monto}`);
+        console.log(`📅 Fecha pago: ${fecha_pago}`);
+        console.log(`💳 Método: ${metodo_pago}`);
+        console.log(`🎯 Asignaciones: ${asignaciones.length}`);
+
+        if (asignaciones && asignaciones.length > 0) {
+            console.log('📋 Detalle asignaciones:');
+            asignaciones.forEach((a, i) => {
+                console.log(`  ${i+1}. Cargo ID: ${a.cargo_domicilio_id}, Monto: ${a.monto}`);
+            });
+        }
+
+        const session = await mongoose.startSession();
+        let transaccionActiva = false;
+        
+        try {
+            // 1. VALIDAR RESIDENTE
+            console.log('🔍 Buscando residente...');
+            const residente = await Residente.findById(residente_id)
+                .populate('user_id')
+                .populate('domicilio_id');
+            
+            if (!residente) {
+                console.error('❌ Residente no encontrado:', residente_id);
+                await session.endSession();
+                return res.status(404).json({
+                    success: false,
+                    message: 'Residente no encontrado'
+                });
+            }
+
+            console.log(`✅ Residente encontrado: ${residente.user_id?.nombre || 'N/A'}`);
+            console.log(`🏠 Domicilio ID: ${residente.domicilio_id?._id}`);
+
+            // 2. VERIFICAR MONTO
+            const montoNum = parseFloat(monto);
+            console.log(`🔢 Monto numérico: ${montoNum}`);
+            
+            if (montoNum <= 0) {
+                console.error('❌ Monto inválido:', montoNum);
+                await session.endSession();
+                return res.status(400).json({
+                    success: false,
+                    message: 'El monto debe ser mayor a 0'
+                });
+            }
+
+            // 3. INICIAR TRANSACCIÓN
+            console.log('🔄 Iniciando transacción...');
+            session.startTransaction();
+            transaccionActiva = true;
+            console.log('✅ Transacción iniciada');
+
+            // 4. CREAR COMPROBANTE
+            console.log('📝 Creando comprobante...');
+            const comprobanteData = {
+                residente_id,
+                cargo_domicilio_id: asignaciones && asignaciones.length > 0 
+                    ? asignaciones[0].cargo_domicilio_id 
+                    : null,
+                monto_total: montoNum,
+                fecha_pago: new Date(fecha_pago),
+                metodo_pago,
+                institucion_bancaria: institucion_bancaria || null,
+                numero_referencia: numero_referencia || null,
+                cuenta_destino: cuenta_destino || null,
+                comprobante_url: req.file ? req.file.path : '/uploads/comprobantes/dummy.pdf',
+                observaciones: observaciones || '',
+                estatus: 'aprobado',
+                fecha_aprobacion: new Date(),
+                usuario_aprobador_id: req.userId
+            };
+
+            console.log('📄 Datos del comprobante:', comprobanteData);
+
+            const comprobante = await ComprobantePago.create([comprobanteData], { session });
+            console.log(`✅ Comprobante creado: ${comprobante[0]._id}, Folio: ${comprobante[0].folio}`);
+
+            let totalAsignado = 0;
+            const pagosAplicados = [];
+            let cargoDomicilioPrincipal = null;
+
+            // 5. PROCESAR ASIGNACIONES
+            if (asignaciones && asignaciones.length > 0) {
+                console.log('🎯 Procesando asignaciones manuales...');
+                
+                // FLUJO 1: ASIGNACIÓN MANUAL EXPLÍCITA
+                for (const [index, asignacion] of asignaciones.entries()) {
+                    console.log(`\n📌 Procesando asignación ${index + 1}/${asignaciones.length}:`);
+                    console.log(`   Cargo ID: ${asignacion.cargo_domicilio_id}`);
+                    console.log(`   Monto: ${asignacion.monto}`);
+
+                    // Buscar cargo DOMICILIO - ¡IMPORTANTE! Es CargoDomicilio, no Cargo
+                    const cargoDomicilio = await CargoDomicilio.findById(
+                        asignacion.cargo_domicilio_id
+                    ).session(session);
+
+                    if (!cargoDomicilio) {
+                        console.error(`❌ CargoDomicilio no encontrado: ${asignacion.cargo_domicilio_id}`);
+                        throw new Error(`Cargo no encontrado: ${asignacion.cargo_domicilio_id}`);
+                    }
+
+                    console.log(`✅ CargoDomicilio encontrado: ${cargoDomicilio._id}`);
+                    console.log(`   Domicilio ID: ${cargoDomicilio.domicilio_id}`);
+                    console.log(`   Saldo pendiente actual: ${cargoDomicilio.saldo_pendiente}`);
+                    console.log(`   Estatus actual: ${cargoDomicilio.estatus}`);
+                    console.log(`   Cargo ID (padre): ${cargoDomicilio.cargo_id}`);
+
+                    // Verificar que el cargo pertenece al residente
+                    if (!cargoDomicilio.domicilio_id.equals(residente.domicilio_id._id)) {
+                        console.error(`❌ El cargo no pertenece al residente`);
+                        console.error(`   Domicilio cargo: ${cargoDomicilio.domicilio_id}`);
+                        console.error(`   Domicilio residente: ${residente.domicilio_id._id}`);
+                        throw new Error(`El cargo ${cargoDomicilio._id} no pertenece al residente ${residente_id}`);
+                    }
+
+                    // Verificar monto
+                    const montoAsignacion = parseFloat(asignacion.monto);
+                    console.log(`   Monto a asignar: ${montoAsignacion}`);
+                    
+                    if (montoAsignacion > cargoDomicilio.saldo_pendiente) {
+                        console.error(`❌ Monto excede saldo pendiente`);
+                        console.error(`   Saldo disponible: ${cargoDomicilio.saldo_pendiente}`);
+                        console.error(`   Monto intentado: ${montoAsignacion}`);
+                        throw new Error(`Monto excede saldo pendiente del cargo. Saldo: ${cargoDomicilio.saldo_pendiente}, Intento: ${montoAsignacion}`);
+                    }
+
+                    // 1. CREAR PAGO APLICADO PRIMERO
+                    console.log(`💾 Creando PagoAplicado...`);
+                    const pagoAplicado = await PagoAplicado.create([{
+                        comprobante_id: comprobante[0]._id,
+                        cargo_domicilio_id: cargoDomicilio._id,
+                        monto_aplicado: montoAsignacion,
+                        tipo_asignacion: 'manual',
+                        usuario_asignador_id: req.userId,
+                        notas: `Pago manual registrado por administrador`
+                    }], { session });
+
+                    console.log(`✅ PagoAplicado creado: ${pagoAplicado[0]._id}`);
+                    pagosAplicados.push(pagoAplicado[0]);
+
+                    // 2. CALCULAR NUEVOS VALORES
+                    const nuevoSaldo = cargoDomicilio.saldo_pendiente - montoAsignacion;
+                    const nuevoEstatus = nuevoSaldo <= 0 ? 'pagado' : cargoDomicilio.estatus;
+                    const nuevaFechaPago = nuevoSaldo <= 0 ? new Date() : null;
+
+                    console.log(`🔄 Actualizando CargoDomicilio...`);
+                    console.log(`   Saldo anterior: ${cargoDomicilio.saldo_pendiente}`);
+                    console.log(`   Saldo nuevo: ${nuevoSaldo}`);
+                    console.log(`   Estatus nuevo: ${nuevoEstatus}`);
+
+                    // 3. ACTUALIZAR CARGO DOMICILIO - SOLUCIÓN AL PROBLEMA DE CACHÉ
+                    // Usar updateOne en lugar de save() para evitar problemas de caché
+                    const updateResult = await CargoDomicilio.updateOne(
+                        { _id: cargoDomicilio._id },
+                        {
+                            $set: {
+                                saldo_pendiente: nuevoSaldo,
+                                estatus: nuevoEstatus,
+                                ...(nuevaFechaPago && { fecha_pago: nuevaFechaPago })
+                            }
+                        },
+                        { session }
+                    );
+
+                    console.log(`✅ CargoDomicilio actualizado en BD`);
+                    console.log(`   Resultado update:`, {
+                        matched: updateResult.matchedCount,
+                        modified: updateResult.modifiedCount
+                    });
+
+                    // 4. FORZAR RECARGA DEL DOCUMENTO (sin caché de sesión)
+                    const cargoActualizado = await CargoDomicilio.findById(
+                        cargoDomicilio._id
+                    ).session(null).lean(); // session(null) para leer fuera de la transacción
+                    
+                    console.log(`🔍 Verificación directa de BD:`);
+                    console.log(`   ID: ${cargoActualizado._id}`);
+                    console.log(`   Saldo: ${cargoActualizado.saldo_pendiente}`);
+                    console.log(`   Estatus: ${cargoActualizado.estatus}`);
+
+                    // Guardar primer cargo como referencia para el comprobante
+                    if (!cargoDomicilioPrincipal) {
+                        cargoDomicilioPrincipal = cargoDomicilio._id;
+                        console.log(`📌 Cargo principal establecido: ${cargoDomicilioPrincipal}`);
+                    }
+
+                    totalAsignado += montoAsignacion;
+                    console.log(`💰 Total asignado acumulado: ${totalAsignado}`);
+                }
+            } else {
+                console.log('🤖 Procesando asignación automática por antigüedad...');
+                // FLUJO 2: ASIGNACIÓN AUTOMÁTICA
+                const cargosPendientes = await CargoDomicilio.find({
+                    domicilio_id: residente.domicilio_id._id,
+                    saldo_pendiente: { $gt: 0 },
+                    estatus: { $in: ['pendiente', 'vencido'] }
+                })
+                .populate('cargo_id', 'nombre fecha_vencimiento')
+                .sort({ 'cargo_id.fecha_vencimiento': 1 })
+                .session(session);
+
+                console.log(`📊 Cargos pendientes encontrados: ${cargosPendientes.length}`);
+
+                let montoRestante = montoNum;
+                console.log(`💰 Monto a distribuir: ${montoRestante}`);
+
+                for (const [index, cargoDomicilio] of cargosPendientes.entries()) {
+                    if (montoRestante <= 0) {
+                        console.log(`⏹️ Monto agotado, deteniendo distribución`);
+                        break;
+                    }
+
+                    const montoAAplicar = Math.min(montoRestante, cargoDomicilio.saldo_pendiente);
+                    console.log(`\n📌 Cargo ${index + 1}:`);
+                    console.log(`   ID: ${cargoDomicilio._id}`);
+                    console.log(`   Nombre: ${cargoDomicilio.cargo_id?.nombre}`);
+                    console.log(`   Saldo: ${cargoDomicilio.saldo_pendiente}`);
+                    console.log(`   Aplicar: ${montoAAplicar}`);
+
+                    // Crear PagoAplicado
+                    const pagoAplicado = await PagoAplicado.create([{
+                        comprobante_id: comprobante[0]._id,
+                        cargo_domicilio_id: cargoDomicilio._id,
+                        monto_aplicado: montoAAplicar,
+                        tipo_asignacion: 'automatica_admin',
+                        usuario_asignador_id: req.userId,
+                        notas: 'Asignación automática por antigüedad'
+                    }], { session });
+
+                    console.log(`✅ PagoAplicado creado: ${pagoAplicado[0]._id}`);
+                    pagosAplicados.push(pagoAplicado[0]);
+
+                    // Guardar primer cargo como referencia
+                    if (!cargoDomicilioPrincipal) {
+                        cargoDomicilioPrincipal = cargoDomicilio._id;
+                    }
+
+                    // Actualizar cargo domicilio usando updateOne (evita problemas de caché)
+                    const nuevoSaldo = cargoDomicilio.saldo_pendiente - montoAAplicar;
+                    const nuevoEstatus = nuevoSaldo <= 0 ? 'pagado' : cargoDomicilio.estatus;
+                    
+                    await CargoDomicilio.updateOne(
+                        { _id: cargoDomicilio._id },
+                        {
+                            $set: {
+                                saldo_pendiente: nuevoSaldo,
+                                estatus: nuevoEstatus,
+                                ...(nuevoSaldo <= 0 && { fecha_pago: new Date() })
+                            }
+                        },
+                        { session }
+                    );
+
+                    console.log(`✅ Cargo actualizado: ${cargoDomicilio.saldo_pendiente} → ${nuevoSaldo}`);
+
+                    montoRestante -= montoAAplicar;
+                    totalAsignado += montoAAplicar;
+                    console.log(`💰 Monto restante: ${montoRestante}`);
+                }
+
+                // 6. MANEJAR SALDO A FAVOR
+                if (montoRestante > 0) {
+                    console.log(`💎 Generando saldo a favor: ${montoRestante}`);
+                    await SaldoDomicilio.findOneAndUpdate(
+                        { domicilio_id: residente.domicilio_id._id },
+                        { 
+                            $inc: { saldo_favor: montoRestante },
+                            $set: { 
+                                notas: `Saldo generado por pago manual (${Utils.formatCurrency(montoNum)})`
+                            }
+                        },
+                        { upsert: true, new: true, session }
+                    );
+                    console.log(`✅ Saldo a favor actualizado`);
+                }
+            }
+
+            // 7. ACTUALIZAR COMPROBANTE CON CARGO PRINCIPAL
+            if (cargoDomicilioPrincipal) {
+                comprobante[0].cargo_domicilio_id = cargoDomicilioPrincipal;
+                await comprobante[0].save({ session });
+                console.log(`📌 Comprobante actualizado con cargo principal: ${cargoDomicilioPrincipal}`);
+            }
+
+            // 8. COMMIT TRANSACCIÓN
+            console.log('✅ Todo OK, confirmando transacción...');
+            await session.commitTransaction();
+            transaccionActiva = false;
+            console.log('🎉 Transacción confirmada exitosamente!');
+
+            // ========== A PARTIR DE AQUÍ: FUERA DE TRANSACCIÓN ==========
+            
+            // 9. VERIFICACIÓN FINAL DESDE LA BD REAL
+            console.log('\n🔍 VERIFICACIÓN FINAL DESDE BD:');
+            if (asignaciones && asignaciones.length > 0) {
+                for (const asignacion of asignaciones) {
+                    // Leer DESPUÉS del commit, sin sesión, para ver datos reales
+                    const cargoFinal = await CargoDomicilio.findById(asignacion.cargo_domicilio_id)
+                        .populate('cargo_id', 'nombre');
+                    
+                    console.log(`   Cargo ${asignacion.cargo_domicilio_id}:`);
+                    console.log(`     - Nombre: ${cargoFinal.cargo_id?.nombre || 'N/A'}`);
+                    console.log(`     - Saldo pendiente: ${cargoFinal.saldo_pendiente}`);
+                    console.log(`     - Estatus: ${cargoFinal.estatus}`);
+                    console.log(`     - Fecha pago: ${cargoFinal.fecha_pago}`);
+                    console.log(`     - Última actualización: ${cargoFinal.updatedAt}`);
+                    
+                    // Verificar si hay pagos aplicados
+                    const pagosDelCargo = await PagoAplicado.find({
+                        cargo_domicilio_id: asignacion.cargo_domicilio_id,
+                        comprobante_id: comprobante[0]._id
+                    });
+                    console.log(`     - Pagos aplicados: ${pagosDelCargo.length}`);
+                }
+            }
+
+            // 10. NOTIFICAR AL RESIDENTE
+            let notificacionEnviada = false;
+            try {
+                if (residente.user_id && residente.user_id._id) {
+                    console.log('📨 Enviando notificación al residente...');
+                    // Asegúrate de que NotificationService esté importado correctamente
+                    if (typeof NotificationService !== 'undefined') {
+                        await NotificationService.sendNotification({
+                            userId: residente.user_id._id,
+                            tipo: 'push',
+                            titulo: '💰 Pago registrado',
+                            mensaje: `Se registró un pago de ${Utils.formatCurrency(montoNum)} a tu cuenta`,
+                            data: {
+                                tipo: 'pago_manual',
+                                action: 'admin_registered',
+                                comprobante_id: comprobante[0]._id,
+                                monto_total: montoNum,
+                                monto_aplicado: totalAsignado,
+                                saldo_favor_generado: montoNum - totalAsignado
+                            }
+                        });
+                        notificacionEnviada = true;
+                        console.log('✅ Notificación enviada');
+                    } else {
+                        console.warn('⚠️ NotificationService no está definido');
+                    }
+                }
+            } catch (notifError) {
+                console.warn('⚠️ Error enviando notificación:', notifError.message);
+            }
+
+            // 11. RESPUESTA EXITOSA
+            console.log('🏁 Enviando respuesta exitosa al cliente');
+            res.status(201).json({
+                success: true,
+                message: 'Pago manual registrado exitosamente',
+                data: {
+                    comprobante_id: comprobante[0]._id,
+                    folio: comprobante[0].folio,
+                    residente: {
+                        id: residente._id,
+                        nombre: `${residente.user_id?.nombre || ''} ${residente.user_id?.apellido || ''}`.trim()
+                    },
+                    monto_total: montoNum,
+                    monto_aplicado: totalAsignado,
+                    saldo_favor_generado: montoNum - totalAsignado,
+                    cargos_afectados: pagosAplicados.length,
+                    cargos_detalle: asignaciones && asignaciones.length > 0 ? 
+                        asignaciones.map(a => ({
+                            cargo_domicilio_id: a.cargo_domicilio_id,
+                            monto_aplicado: parseFloat(a.monto)
+                        })) : 
+                        'Asignación automática',
+                    fecha_registro: new Date(),
+                    notificacion_enviada: notificacionEnviada,
+                    // INCLUIR DATOS DE VERIFICACIÓN
+                    verificacion: asignaciones && asignaciones.length > 0 ? 
+                        await Promise.all(asignaciones.map(async (a) => {
+                            const cargo = await CargoDomicilio.findById(a.cargo_domicilio_id);
+                            return {
+                                cargo_id: a.cargo_domicilio_id,
+                                saldo_final: cargo.saldo_pendiente,
+                                estatus_final: cargo.estatus
+                            };
+                        })) : []
+                }
+            });
+
+        } catch (error) {
+            // 12. MANEJO DE ERRORES
+            console.error('\n❌ ERROR EN PROCESO DE PAGO:');
+            console.error('   Mensaje:', error.message);
+            console.error('   Stack:', error.stack);
+            
+            // Solo abortar si la transacción está activa
+            if (session && transaccionActiva) {
+                try {
+                    console.log('🔄 Abortando transacción...');
+                    await session.abortTransaction();
+                    console.log('✅ Transacción abortada');
+                } catch (abortError) {
+                    console.error('❌ Error abortando transacción:', abortError.message);
+                }
+            }
+            
+            // 13. RESPUESTA DE ERROR DETALLADA
+            console.log('📤 Enviando respuesta de error al cliente');
+            res.status(400).json({
+                success: false,
+                message: error.message || 'Error registrando pago manual',
+                error_details: {
+                    step: 'processing_payment',
+                    residente_id,
+                    monto,
+                    asignaciones_count: asignaciones?.length || 0,
+                    timestamp: new Date().toISOString()
+                },
+                debug: process.env.NODE_ENV === 'development' ? error.stack : undefined
+            });
+            
+        } finally {
+            // 14. LIMPIEZA
+            try {
+                if (session) {
+                    console.log('🧹 Cerrando sesión de MongoDB...');
+                    await session.endSession();
+                    console.log('✅ Sesión cerrada');
+                }
+            } catch (endError) {
+                console.error('❌ Error cerrando sesión:', endError.message);
+            }
+            
+            console.log('═══════════════════════════════════════════════\n');
+        }
+    }
+);
+
+// -------------------- PREVISUALIZAR ESTADO DE CUENTA --------------------
+/**
+ * @route   GET /api/finances/admin/recaudacion/previsualizar/:id
+ * @desc    Previsualizar estado de cuenta de un residente (PDF/HTML)
+ * @access  Private (Administrador, Comité)
+ */
+adminRoutes.get(
+    '/recaudacion/previsualizar/:id',
+    validateObjectId('id'),
+    async (req, res) => {
+        try {
+            const { id } = req.params;
+
+            const residente = await Residente.findById(id)
+                .populate('user_id', 'nombre apellido email telefono')
+                .populate({
+                    path: 'domicilio_id',
+                    populate: {
+                        path: 'calle_torre_id',
+                        select: 'nombre tipo'
+                    }
+                });
+
+            if (!residente) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Residente no encontrado'
+                });
+            }
+
+            // Obtener cargos del domicilio
+            const cargosDomicilio = await CargoDomicilio.find({
+                domicilio_id: residente.domicilio_id._id
+            })
+            .populate('cargo_id', 'nombre descripcion fecha_cargo fecha_vencimiento')
+            .populate({
+                path: 'cargo_id',
+                populate: {
+                    path: 'tipo_cargo_id',
+                    select: 'nombre tipo'
+                }
+            })
+            .sort({ 'cargo_id.fecha_vencimiento': 1 });
+
+            // Calcular totales
+            let totalPagado = 0;
+            let totalPendiente = 0;
+            let totalVencido = 0;
+            
+            const cargosDetallados = cargosDomicilio.map(cargoDom => {
+                const montoPendiente = cargoDom.saldo_pendiente;
+                const esVencido = cargoDom.estatus === 'vencido';
+                
+                if (esVencido) {
+                    totalVencido += montoPendiente;
+                } else if (cargoDom.estatus === 'pendiente') {
+                    totalPendiente += montoPendiente;
+                } else if (cargoDom.estatus === 'pagado') {
+                    totalPagado += (cargoDom.monto_final - montoPendiente);
+                }
+
+                return {
+                    nombre: cargoDom.cargo_id.nombre,
+                    tipo: cargoDom.cargo_id.tipo_cargo_id.tipo,
+                    descripcion: cargoDom.cargo_id.descripcion,
+                    fecha_cargo: cargoDom.cargo_id.fecha_cargo,
+                    fecha_vencimiento: cargoDom.cargo_id.fecha_vencimiento,
+                    monto_original: cargoDom.monto,
+                    descuentos: cargoDom.monto_descuento + 
+                               (cargoDom.monto * cargoDom.porcentaje_descuento / 100),
+                    monto_final: cargoDom.monto_final,
+                    saldo_pendiente: montoPendiente,
+                    estatus: cargoDom.estatus,
+                    dias_vencido: esVencido ? 
+                        Utils.daysBetween(cargoDom.cargo_id.fecha_vencimiento, new Date()) : 0
+                };
+            });
+
+            // Obtener saldo a favor
+            const saldoDomicilio = await SaldoDomicilio.findOne({
+                domicilio_id: residente.domicilio_id._id
+            });
+
+            // Generar datos para previsualización
+            const estadoCuenta = {
+                residente: {
+                    nombre: `${residente.user_id.nombre} ${residente.user_id.apellido}`,
+                    email: residente.user_id.email,
+                    telefono: residente.user_id.telefono,
+                    domicilio: {
+                        calle: residente.domicilio_id.calle_torre_id?.nombre || 'N/A',
+                        numero: residente.domicilio_id.numero
+                    }
+                },
+                fecha_generacion: new Date(),
+                resumen: {
+                    total_pagado: totalPagado,
+                    total_pendiente: totalPendiente,
+                    total_vencido: totalVencido,
+                    total_general: totalPendiente + totalVencido,
+                    saldo_favor: saldoDomicilio?.saldo_favor || 0
+                },
+                cargos: cargosDetallados,
+                total_cargos: cargosDetallados.length
+            };
+
+            // En una implementación real, aquí generarías un PDF
+            // Por ahora, devolvemos los datos estructurados
+            
+            res.json({
+                success: true,
+                estado_cuenta,
+                opciones: {
+                    formato: 'html', // En producción: 'pdf', 'html', 'json'
+                    descargable: true,
+                    incluir_logo: true,
+                    incluir_firmas: false
+                }
+            });
+
+        } catch (error) {
+            res.status(500).json({
+                success: false,
+                message: 'Error generando previsualización',
+                error: error.message
+            });
+        }
+    }
+);
+
+// -------------------- NOTIFICAR ESTADO DE CUENTA --------------------
+/**
+ * @route   POST /api/finances/admin/recaudacion/notificar/:id
+ * @desc    Notificar estado de cuenta a residente
+ * @access  Private (Administrador, Comité)
+ */
+adminRoutes.post(
+    '/recaudacion/notificar/:id',
+    validateObjectId('id'),
+    async (req, res) => {
+        try {
+            const { id } = req.params;
+            const { mensaje_personalizado } = req.body;
+
+            const residente = await Residente.findById(id)
+                .populate('user_id');
+
+            if (!residente) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Residente no encontrado'
+                });
+            }
+
+            // Obtener estado de cuenta
+            const cargosDomicilio = await CargoDomicilio.find({
+                domicilio_id: residente.domicilio_id._id,
+                saldo_pendiente: { $gt: 0 },
+                estatus: { $in: ['pendiente', 'vencido'] }
+            })
+            .populate('cargo_id', 'nombre fecha_vencimiento');
+
+            const totalPendiente = cargosDomicilio.reduce((sum, cd) => sum + cd.saldo_pendiente, 0);
+            const cargosVencidos = cargosDomicilio.filter(cd => cd.estatus === 'vencido').length;
+
+            // Enviar notificación
+            await NotificationService.sendNotification({
+                userId: residente.user_id._id,
+                tipo: 'push',
+                titulo: '📊 Estado de cuenta',
+                mensaje: mensaje_personalizado || 
+                        `Tienes ${cargosDomicilio.length} cargo(s) pendiente(s) por un total de ${Utils.formatCurrency(totalPendiente)}. ${cargosVencidos > 0 ? `${cargosVencidos} vencido(s).` : ''}`,
+                data: {
+                    tipo: 'estado_cuenta',
+                    action: 'notified',
+                    total_cargos: cargosDomicilio.length,
+                    total_pendiente: totalPendiente,
+                    cargos_vencidos: cargosVencidos,
+                    fecha_notificacion: new Date()
+                },
+                accionRequerida: true,
+                accionTipo: 'ver_estado_cuenta'
+            });
+
+            // Registrar la notificación en el sistema
+            console.log(`📨 [NOTIFICACIÓN] Estado de cuenta notificado a ${residente.user_id.email}`);
+
+            res.json({
+                success: true,
+                message: 'Estado de cuenta notificado exitosamente',
+                notificacion: {
+                    residente: `${residente.user_id.nombre} ${residente.user_id.apellido}`,
+                    email: residente.user_id.email,
+                    total_cargos: cargosDomicilio.length,
+                    total_pendiente: totalPendiente,
+                    fecha_envio: new Date()
+                }
+            });
+
+        } catch (error) {
+            res.status(500).json({
+                success: false,
+                message: 'Error notificando estado de cuenta',
+                error: error.message
+            });
+        }
+    }
+);
+// -------------------- SALDO A FAVOR --------------------
+
+/**
+ * @route   POST /api/finances/admin/saldo-favor/:domicilio_id/aplicar
+ * @desc    Aplicar saldo a favor a cargos pendientes
+ * @access  Private (Administrador)
+ */
+adminRoutes.post(
+    '/saldo-favor/:domicilio_id/aplicar',
+    validateObjectId('domicilio_id'),
+    requireRole('administrador'),
+    chargesController.applySaldoFavor
+);
+
+/**
+ * @route   POST /api/finances/admin/saldo-favor/transferir
+ * @desc    Transferir saldo a favor entre domicilios
+ * @access  Private (Administrador)
+ */
+adminRoutes.post(
+    '/saldo-favor/transferir',
+    requireRole('administrador'),
+    chargesController.transferSaldoFavor
+);
+
+/**
+ * @route   PUT /api/finances/admin/surcharges/:id
+ * @desc    Modificar recargo existente
+ * @access  Private (Administrador)
+ */
+adminRoutes.put(
+    '/surcharges/:id',
+    validateObjectId('id'),
+    requireRole('administrador'),
+    surchargesController.updateSurcharge
+);
+
+/**
+ * @route   DELETE /api/finances/admin/surcharges/:id
+ * @desc    Eliminar recargo
+ * @access  Private (Administrador)
+ */
+adminRoutes.delete(
+    '/surcharges/:id',
+    validateObjectId('id'),
+    requireRole('administrador'),
+    surchargesController.deleteSurcharge
+);
+
 
 export default router;

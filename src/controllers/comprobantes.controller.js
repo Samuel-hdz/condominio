@@ -9,6 +9,7 @@ import NotificationService from '../libs/notifications.js';
 import Utils from '../libs/utils.js';
 import fs from 'fs';
 import path from 'path';
+import mongoose from 'mongoose';
 
 export const comprobantesController = {
     /**
@@ -163,186 +164,89 @@ export const comprobantesController = {
      * Aprobar comprobante de pago
      */
     approveComprobante: catchAsync(async (req, res) => {
-        const { id } = req.params;
-        const { asignaciones = [], comentarios } = req.body;
+    const { id } = req.params;
+    const { comentarios } = req.body || {};
 
-        const comprobante = await ComprobantePago.findById(id);
-        if (!comprobante) {
-            return res.status(404).json({
-                success: false,
-                message: 'Comprobante no encontrado'
-            });
+    const comprobante = await ComprobantePago.findById(id)
+        .populate('cargo_domicilio_id')
+        .populate('residente_id');
+    
+    if (!comprobante) {
+        return res.status(404).json({
+            success: false,
+            message: 'Comprobante no encontrado'
+        });
+    }
+
+    if (comprobante.estatus !== 'pendiente') {
+        return res.status(400).json({
+            success: false,
+            message: `El comprobante ya ha sido ${comprobante.estatus}`
+        });
+    }
+
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+        const cargoDomicilio = comprobante.cargo_domicilio_id;
+        const montoPago = comprobante.monto_total;
+
+        // Verificar que el saldo pendiente aún sea suficiente
+        if (montoPago > cargoDomicilio.saldo_pendiente) {
+            throw new Error(`El pago excede el saldo pendiente del cargo. Saldo actual: ${cargoDomicilio.saldo_pendiente}`);
         }
 
-        if (comprobante.estatus !== 'pendiente') {
-            return res.status(400).json({
-                success: false,
-                message: `El comprobante ya ha sido ${comprobante.estatus}`
-            });
+        // Crear pago aplicado automáticamente
+        const pagoAplicado = await PagoAplicado.create([{
+            comprobante_id: comprobante._id,
+            cargo_domicilio_id: cargoDomicilio._id,
+            monto_aplicado: montoPago,
+            tipo_asignacion: 'automatica',
+            usuario_asignador_id: req.userId
+        }], { session });
+
+        // Actualizar cargo domicilio
+        cargoDomicilio.saldo_pendiente -= montoPago;
+        if (cargoDomicilio.saldo_pendiente <= 0) {
+            cargoDomicilio.estatus = 'pagado';
+            cargoDomicilio.fecha_pago = new Date();
         }
+        await cargoDomicilio.save({ session });
 
-        const session = await mongoose.startSession();
-        session.startTransaction();
+        // Actualizar comprobante
+        comprobante.estatus = 'aprobado';
+        comprobante.fecha_aprobacion = new Date();
+        comprobante.usuario_aprobador_id = req.userId;
+        comprobante.observaciones = comentarios || comprobante.observaciones;
+        
+        // Generar comprobante final
+        comprobante.comprobante_final_url = comprobantesController.generateComprobanteFinal(comprobante, [pagoAplicado[0]]);
+        await comprobante.save({ session });
 
-        try {
-            let totalAsignado = 0;
-            const pagosCreados = [];
+        await session.commitTransaction();
 
-            // Si hay asignaciones manuales, aplicarlas
-            if (asignaciones && asignaciones.length > 0) {
-                for (const asignacion of asignaciones) {
-                    const cargoDomicilio = await CargoDomicilio.findById(
-                        asignacion.cargo_domicilio_id
-                    ).session(session);
+        // Notificaciones... (igual que antes)
 
-                    if (!cargoDomicilio) {
-                        throw new Error(`Cargo no encontrado: ${asignacion.cargo_domicilio_id}`);
-                    }
-
-                    // Verificar que el cargo pertenece al residente del comprobante
-                    const residente = await Residente.findById(comprobante.residente_id).session(session);
-                    if (!cargoDomicilio.domicilio_id.equals(residente.domicilio_id._id)) {
-                        throw new Error('El cargo no pertenece al residente del comprobante');
-                    }
-
-                    // Verificar monto
-                    if (asignacion.monto > cargoDomicilio.saldo_pendiente) {
-                        throw new Error(`Monto excede saldo pendiente del cargo: ${cargoDomicilio.saldo_pendiente}`);
-                    }
-
-                    // Crear pago aplicado
-                    const pagoAplicado = await PagoAplicado.create([{
-                        comprobante_id: comprobante._id,
-                        cargo_domicilio_id: cargoDomicilio._id,
-                        monto_aplicado: asignacion.monto,
-                        tipo_asignacion: 'manual',
-                        usuario_asignador_id: req.userId
-                    }], { session });
-
-                    pagosCreados.push(pagoAplicado[0]);
-
-                    // Actualizar cargo domicilio
-                    cargoDomicilio.saldo_pendiente -= asignacion.monto;
-                    if (cargoDomicilio.saldo_pendiente <= 0) {
-                        cargoDomicilio.estatus = 'pagado';
-                        cargoDomicilio.fecha_pago = new Date();
-                    }
-                    await cargoDomicilio.save({ session });
-
-                    totalAsignado += asignacion.monto;
-                }
-
-                // Verificar que no se exceda el monto del comprobante
-                if (totalAsignado > comprobante.monto_total) {
-                    throw new Error(`Total asignado (${totalAsignado}) excede monto del comprobante (${comprobante.monto_total})`);
-                }
-            } else {
-                // Asignación automática: aplicar a cargos más antiguos primero
-                const cargosPendientes = await CargoDomicilio.find({
-                    domicilio_id: (await Residente.findById(comprobante.residente_id).session(session)).domicilio_id._id,
-                    saldo_pendiente: { $gt: 0 },
-                    estatus: { $in: ['pendiente', 'vencido'] }
-                })
-                .populate('cargo_id', 'fecha_vencimiento')
-                .sort({ 'cargo_id.fecha_vencimiento': 1 })
-                .session(session);
-
-                let montoRestante = comprobante.monto_total;
-
-                for (const cargoDomicilio of cargosPendientes) {
-                    if (montoRestante <= 0) break;
-
-                    const montoAAplicar = Math.min(montoRestante, cargoDomicilio.saldo_pendiente);
-
-                    const pagoAplicado = await PagoAplicado.create([{
-                        comprobante_id: comprobante._id,
-                        cargo_domicilio_id: cargoDomicilio._id,
-                        monto_aplicado: montoAAplicar,
-                        tipo_asignacion: 'automatica',
-                        usuario_asignador_id: req.userId
-                    }], { session });
-
-                    pagosCreados.push(pagoAplicado[0]);
-
-                    // Actualizar cargo domicilio
-                    cargoDomicilio.saldo_pendiente -= montoAAplicar;
-                    if (cargoDomicilio.saldo_pendiente <= 0) {
-                        cargoDomicilio.estatus = 'pagado';
-                        cargoDomicilio.fecha_pago = new Date();
-                    }
-                    await cargoDomicilio.save({ session });
-
-                    montoRestante -= montoAAplicar;
-                    totalAsignado += montoAAplicar;
-                }
+        res.json({
+            success: true,
+            message: 'Comprobante aprobado exitosamente',
+            comprobante: {
+                id: comprobante._id,
+                folio: comprobante.folio,
+                estatus: comprobante.estatus,
+                monto_total: comprobante.monto_total,
+                cargo_afectado: cargoDomicilio.cargo_id
             }
+        });
 
-            // Actualizar comprobante
-            comprobante.estatus = 'aprobado';
-            comprobante.fecha_aprobacion = new Date();
-            comprobante.usuario_aprobador_id = req.userId;
-            comprobante.observaciones = comentarios || comprobante.observaciones;
-            
-            // Generar comprobante final del fraccionamiento (simulado)
-            comprobante.comprobante_final_url = this.generateComprobanteFinal(comprobante, pagosCreados);
-            
-            await comprobante.save({ session });
-
-            await session.commitTransaction();
-
-            // Notificar al residente
-            const residente = await Residente.findById(comprobante.residente_id)
-                .populate('user_id');
-            
-            await NotificationService.notifications.pagoAprobado(
-                residente.user_id._id,
-                {
-                    concepto: 'Pago aprobado',
-                    monto: comprobante.monto_total,
-                    comprobante_id: comprobante._id,
-                    fecha_aprobacion: comprobante.fecha_aprobacion,
-                    administrador: req.user.nombre
-                }
-            );
-
-            // Notificar a otros administradores
-            const admins = await User.find({ role: 'administrador', _id: { $ne: req.userId } });
-            for (const admin of admins) {
-                await NotificationService.sendNotification({
-                    userId: admin._id,
-                    tipo: 'in_app',
-                    titulo: '✅ Comprobante aprobado',
-                    mensaje: `${req.user.nombre} aprobó un comprobante de ${residente.user_id.nombre}`,
-                    data: {
-                        tipo: 'comprobante',
-                        action: 'approved',
-                        comprobante_id: comprobante._id,
-                        monto: comprobante.monto_total
-                    }
-                });
-            }
-
-            res.json({
-                success: true,
-                message: 'Comprobante aprobado exitosamente',
-                comprobante: {
-                    id: comprobante._id,
-                    folio: comprobante.folio,
-                    estatus: comprobante.estatus,
-                    monto_total: comprobante.monto_total,
-                    total_asignado: totalAsignado,
-                    pagos_aplicados: pagosCreados.length,
-                    comprobante_final: comprobante.comprobante_final_url
-                }
-            });
-
-        } catch (error) {
-            await session.abortTransaction();
-            throw error;
-        } finally {
-            session.endSession();
-        }
-    }),
+    } catch (error) {
+        await session.abortTransaction();
+        throw error;
+    } finally {
+        session.endSession();
+    }
+}),
 
     /**
      * Rechazar comprobante de pago

@@ -284,24 +284,23 @@ class SurchargesJob {
      * Calcular monto del recargo según tipo
      */
     static calcularMontoRecargo(tipoRecargo, valor, cargoDomicilio) {
-        switch (tipoRecargo) {
-            case 'monto_fijo':
-                return parseFloat(valor);
-            
-            case 'porcentaje_adeudo':
-                return (cargoDomicilio.monto_final * parseFloat(valor)) / 100;
-            
-            case 'porcentaje_saldo':
-                return (cargoDomicilio.saldo_pendiente * parseFloat(valor)) / 100;
-            
-            case 'porcentaje_mas_recargos':
-                // Obtener recargos anteriores aplicados
-                return (cargoDomicilio.monto_final * parseFloat(valor)) / 100;
-            
-            default:
-                return 0;
-        }
+    switch (tipoRecargo) {
+        case 'monto_fijo':
+            return parseFloat(valor);
+        
+        case 'porcentaje_original':          // ← Cambiado de 'porcentaje_adeudo'
+            return (cargoDomicilio.monto_final * parseFloat(valor)) / 100;
+        
+        case 'porcentaje_saldo':
+            return (cargoDomicilio.saldo_pendiente * parseFloat(valor)) / 100;
+        
+        case 'porcentaje_total_acumulado':   // ← Cambiado de 'porcentaje_mas_recargos'
+            return (cargoDomicilio.monto_final * parseFloat(valor)) / 100;
+        
+        default:
+            return 0;
     }
+}
 
     /**
      * Notificar a residente sobre recargo aplicado

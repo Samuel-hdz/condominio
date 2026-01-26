@@ -53,9 +53,14 @@ const cargoDomicilioSchema = new mongoose.Schema({
 cargoDomicilioSchema.index({ estatus: 1 });
 cargoDomicilioSchema.index({ cargo_id: 1, domicilio_id: 1 }, { unique: true });
 cargoDomicilioSchema.index({ domicilio_id: 1, estatus: 1 });
+cargoDomicilioSchema.index({ 
+    domicilio_id: 1, 
+    estatus: 1, 
+    fecha_pago: 1 
+});
 
 // Middleware para calcular monto_final y saldo_pendiente
-cargoDomicilioSchema.pre('save', function(next) {
+cargoDomicilioSchema.pre('save', async function() {
     // Calcular monto_final restando descuentos
     let montoFinal = this.monto;
     
@@ -79,7 +84,6 @@ cargoDomicilioSchema.pre('save', function(next) {
         this.saldo_pendiente = this.monto_final;
     }
     
-    next();
 });
 
 export const CargoDomicilio = mongoose.model('CargoDomicilio', cargoDomicilioSchema);

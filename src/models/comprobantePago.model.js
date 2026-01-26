@@ -16,10 +16,10 @@ const comprobantePagoSchema = new mongoose.Schema({
         ref: 'Residente',
         required: true
     },
-    tipo_cargo: {
-        type: String,
-        required: true,
-        enum: ['mantenimiento', 'extraordinario', 'multa']
+    cargo_domicilio_id: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'CargoDomicilio',
+        required: true  // ← OBLIGATORIO ahora
     },
     monto_total: {
         type: Number,

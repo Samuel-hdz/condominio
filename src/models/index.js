@@ -28,6 +28,7 @@ export { Descuento } from './descuento.model.js';
 export { Recargo } from './recargo.model.js';
 export { RecargoFiltro } from './recargoFiltro.model.js';
 export { AplicacionRecargo } from './aplicacionRecargo.model.js';
+export { Personal } from './personal.model.js'
 export { ComprobantePago } from './comprobantePago.model.js';
 export { PagoAplicado } from './pagoAplicado.model.js';
 export { CuentaBancaria } from './cuentaBancaria.model.js';

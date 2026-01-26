@@ -22,7 +22,14 @@ const registroAccesoSchema = new mongoose.Schema({
     },
     metodo_acceso: {
         type: String,
-        enum: ['qr', 'manual', 'reconocimiento'],
+        enum: [
+            'qr',                    // QR individual
+            'texto',                 // Código de texto
+            'manual',                // Ingreso manual
+            'qr_compartido',         // QR compartido (eventos, etc.)
+            'qr_evento_compartido',  // QR compartido específico para eventos
+            'qr_evento'              // QR individual de evento
+        ],
         default: 'qr'
     },
     fecha_hora_ingreso: {

@@ -9,6 +9,8 @@ import { catchAsync } from '../middlewares/errorHandler.js';
 import NotificationService from '../libs/notifications.js';
 import { ModuloSistema } from '../models/moduloSistema.model.js';
 import { PerfilPermiso } from '../models/perfilPermiso.model.js';
+import DomicilioStatusService from '../libs/domicilioStatus.js';
+import { SaldoDomicilio } from '../models/saldoDomicilio.model.js';
 
 export const adminController = {
     /**
@@ -129,36 +131,93 @@ export const adminController = {
         if (!calleTorre) {
             return res.status(404).json({
                 success: false,
-                message: 'Calle/torre no encontrada'
+                message: 'Calle/Torre no encontrada'
             });
         }
 
         // Verificar si ya existe el domicilio
-        const existingDomicile = await Domicilio.findOne({
-            calle_torre_id,
-            numero,
-            letra: letra || null
-        });
-        if (existingDomicile) {
+        const query = { calle_torre_id, numero };
+        if (letra) query.letra = letra;
+
+        const domicilioExistente = await Domicilio.findOne(query);
+        if (domicilioExistente) {
             return res.status(400).json({
                 success: false,
-                message: 'Ya existe un domicilio con esa dirección'
+                message: 'El domicilio ya existe'
             });
         }
 
-        // Crear domicilio
+        // Crear domicilio - estatus será 'inactivo' por default
         const domicilio = await Domicilio.create({
             calle_torre_id,
             numero,
-            letra,
-            referencia
+            letra: letra || null,
+            referencia: referencia || null,
+            motivo_estatus: 'Domicilio creado sin residentes asignados'
+        });
+
+        // Crear saldo domicilio por defecto
+        await SaldoDomicilio.create({
+            domicilio_id: domicilio._id,
+            saldo_favor: 0,
+            notas: 'Saldo inicial al crear domicilio'
         });
 
         res.status(201).json({
             success: true,
             message: 'Domicilio creado exitosamente',
-            domicilio
+            domicilio: {
+                id: domicilio._id,
+                calle_torre: calleTorre.nombre,
+                numero: domicilio.numero,
+                letra: domicilio.letra,
+                estatus: domicilio.estatus,
+                referencia: domicilio.referencia,
+                mensaje: 'El domicilio está inactivo hasta que se asigne un residente'
+            }
         });
+    }),
+
+    
+    /**
+     * Verificar y corregir estatus de domicilios (OPCIONAL)
+     */
+    verifyDomiciliosStatus: catchAsync(async (req, res) => {
+        try {
+            const resultado = await DomicilioStatusService.verifyAllDomiciliosStatus();
+            
+            res.json({
+                success: true,
+                message: 'Verificación de estatus de domicilios completada',
+                resultado
+            });
+        } catch (error) {
+            res.status(500).json({
+                success: false,
+                message: 'Error verificando estatus de domicilios',
+                error: error.message
+            });
+        }
+    }),
+
+    /**
+     * Obtener estadísticas de domicilios
+     */
+    getDomiciliosStats: catchAsync(async (req, res) => {
+        try {
+            const stats = await DomicilioStatusService.getDomiciliosStats();
+            
+            res.json({
+                success: true,
+                ...stats
+            });
+        } catch (error) {
+            res.status(500).json({
+                success: false,
+                message: 'Error obteniendo estadísticas',
+                error: error.message
+            });
+        }
     }),
 
     /**

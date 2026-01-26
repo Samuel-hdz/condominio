@@ -20,6 +20,22 @@ const domicilioSchema = new mongoose.Schema({
     referencia: {
         type: String,
         maxlength: 200
+    },
+    estatus: {
+        type: String,
+        enum: ['activo', 'inactivo', 'suspendido'],
+        default: 'inactivo' // ← CAMBIO IMPORTANTE: 'inactivo' por default
+    },
+    // Agregar campos para tracking
+    fecha_activacion: {
+        type: Date
+    },
+    fecha_inactivacion: {
+        type: Date
+    },
+    motivo_estatus: {
+        type: String,
+        maxlength: 200
     }
 }, {
     timestamps: true

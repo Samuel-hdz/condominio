@@ -19,6 +19,35 @@ const residentRoutes = Router();
 residentRoutes.use(requireResidentMobileAccess);
 
 /**
+ * @route   GET /api/visits/resident/personal
+ * @desc    Obtener personal registrado por residente
+ * @access  Private (Residente)
+ */
+residentRoutes.get(
+    '/personal',
+    visitsController.getResidentPersonal
+);
+
+/**
+ * @route   POST /api/visits/resident/personal
+ * @desc    Registrar nuevo personal
+ * @access  Private (Residente)
+ */
+residentRoutes.post(
+    '/personal',
+    visitsController.createPersonal
+);
+
+/**
+ * @route   POST /api/visits/resident/providers
+ * @desc    Crear proveedor (solo para este residente)
+ * @access  Private (Residente)
+ */
+residentRoutes.post(
+    '/providers',
+    visitsController.createProviderFromResident
+);
+/**
  * @route   POST /api/visits/resident/authorizations
  * @desc    Crear nueva autorización de visita
  * @access  Private (Residente)

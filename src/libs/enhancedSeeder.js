@@ -206,7 +206,8 @@ class EnhancedSeeder {
             { nombre: 'unica_vez', descripcion: 'Autorizado por única vez' },
             { nombre: 'proveedor', descripcion: 'Proveedor autorizado' },
             { nombre: 'personal', descripcion: 'Personal de servicio' },
-            { nombre: 'evento', descripcion: 'Invitado a evento' }
+            { nombre: 'evento', descripcion: 'Invitado a evento' },
+            { nombre: 'personal', descripcion: 'Personal doméstico' }
         ];
         
         for (const tipo of tipos) {
@@ -264,43 +265,37 @@ class EnhancedSeeder {
     
     static async seedChargeTypes() {
         const tipos = [
-            { 
-                nombre: 'Mantenimiento Mensual', 
-                descripcion: 'Cuota de mantenimiento mensual',
-                tipo: 'mantenimiento',
-                recurrente: true,
-                periodicidad: 'mensual',
-                dias_vencimiento: 15
-            },
-            { 
-                nombre: 'Mantenimiento Bimestral', 
-                descripcion: 'Cuota de mantenimiento bimestral',
-                tipo: 'mantenimiento',
-                recurrente: true,
-                periodicidad: 'bimestral',
-                dias_vencimiento: 20
-            },
-            { 
-                nombre: 'Cuota Extraordinaria', 
-                descripcion: 'Cuota extraordinaria para proyectos',
-                tipo: 'extraordinario',
-                recurrente: false,
-                dias_vencimiento: 30
-            },
-            { 
-                nombre: 'Multa por Estacionamiento', 
-                descripcion: 'Multa por mal estacionamiento',
-                tipo: 'multa',
-                recurrente: false,
-                dias_vencimiento: 10
-            },
-            { 
-                nombre: 'Multa por Ruido', 
-                descripcion: 'Multa por exceso de ruido',
-                tipo: 'multa',
-                recurrente: false,
-                dias_vencimiento: 10
-            }
+            {
+            codigo: 'MANT-MEN',
+            nombre: 'Mantenimiento Ordinario',
+            tipo: 'mantenimiento',
+            descripcion: 'Cuota para mantenimiento mensual',
+            dias_vencimiento_sugerido: 10,
+            monto_base_sugerido: 2500.00,
+            sugerir_recurrente: true,
+            periodicidad_sugerida: 'mensual',
+            categoria: 'ordinario'
+        },
+        {
+            codigo: 'EXT-GEN',
+            nombre: 'Cuota Extraordinaria',
+            tipo: 'extraordinario',
+            descripcion: 'Contribución extraordinaria',
+            dias_vencimiento_sugerido: 30,
+            monto_base_sugerido: 5000.00,
+            sugerir_recurrente: false,
+            categoria: 'extraordinario'
+        },
+        {
+            codigo: 'MUL-ESTAC',
+            nombre: 'Multa por Estacionamiento',
+            tipo: 'multa',
+            descripcion: 'Sanción por estacionamiento indebido',
+            dias_vencimiento_sugerido: 15,
+            monto_base_sugerido: 300.00,
+            sugerir_recurrente: false,
+            categoria: 'sancion'
+        }
         ];
         
         for (const tipo of tipos) {
@@ -385,32 +380,26 @@ class EnhancedSeeder {
                 }
             },
             {
-                nombre_perfil: 'Miembro de Comité Básico',
+                nombre_perfil: 'Miembro de Comité',
                 descripcion: 'Permisos de visualización para miembros del comité',
                 roles_asociados: ['comite'],
                 permisos_json: {
+                    'Administración': 'ver',
+                    'Caseta': 'ver',
+                    'Cobranza': 'ver',
+                    'Configuración': 'ver',
                     'Residentes': 'ver',
+                    'Usuarios (Personal)': 'ver',
                     'Comité': 'ver',
                     'Publicaciones': 'ver',
-                    'Estados de Cuenta': 'ver',
-                    'Cuotas': 'ver',
-                    'Recaudación': 'ver'
-                }
-            },
-            {
-                nombre_perfil: 'Miembro de Comité Avanzado',
-                descripcion: 'Permisos extendidos para miembros del comité',
-                roles_asociados: ['comite'],
-                permisos_json: {
-                    'Residentes': 'editar',
-                    'Comité': 'editar',
-                    'Publicaciones': 'editar',
-                    'Estados de Cuenta': 'editar',
-                    'Cuotas': 'editar',
-                    'Recaudación': 'editar',
                     'Libro de Visitas': 'ver',
                     'Bitácora': 'ver',
-                    'Paquetería': 'ver'
+                    'Paquetería': 'ver',
+                    'Cuotas': 'ver',
+                    'Recaudación': 'ver',
+                    'Comprobantes': 'ver',
+                    'Cuentas de Pago': 'ver',
+                    'Permisos': 'ver'
                 }
             }
         ];

@@ -7,6 +7,7 @@ import { EstadoRecepcion } from '../models/estadoRecepcion.model.js';
 import { ResidenteMorosidad } from '../models/residenteMorosidad.model.js';
 import { catchAsync } from '../middlewares/errorHandler.js';
 import NotificationService from '../libs/notifications.js';
+import DomicilioStatusService from '../libs/domicilioStatus.js';
 
 export const residentsController = {
     /**
@@ -71,6 +72,9 @@ export const residentsController = {
             estatus
         });
 
+        // ============ ACTUALIZAR ESTATUS DEL DOMICILIO ============
+        await DomicilioStatusService.updateDomicilioStatus(domicilio_id);
+
         // Asignar rol de residente al usuario
         await UserRole.findOneAndUpdate(
             { user_id, role: 'residente' },
@@ -100,10 +104,7 @@ export const residentsController = {
             .populate({
                 path: 'domicilio_id',
                 populate: {
-                    path: 'calle_torre_id',
-                    populate: {
-                        path: 'unidad_geografica_id'
-                    }
+                    path: 'calle_torre_id'
                 }
             });
 
@@ -127,6 +128,45 @@ export const residentsController = {
             residente: residenteCompleto
         });
     }),
+
+    /**
+     * Eliminar residente (cambiar estatus a inactivo)
+     */
+    deleteResident: catchAsync(async (req, res) => {
+        const { id } = req.params;
+        const { motivo = 'Eliminación por administrador' } = req.body;
+
+        // Buscar residente
+        const residente = await Residente.findById(id);
+        if (!residente) {
+            return res.status(404).json({
+                success: false,
+                message: 'Residente no encontrado'
+            });
+        }
+
+        const domicilio_id = residente.domicilio_id;
+
+        // Cambiar estatus a inactivo en lugar de eliminar
+        residente.estatus = 'inactivo';
+        await residente.save();
+
+        // ============ ACTUALIZAR ESTATUS DEL DOMICILIO ============
+        await DomicilioStatusService.updateDomicilioStatus(domicilio_id);
+
+        res.json({
+            success: true,
+            message: 'Residente inactivado exitosamente',
+            residente: {
+                id: residente._id,
+                estatus: residente.estatus,
+                fecha_inactivacion: new Date(),
+                motivo
+            }
+        });
+    }),
+
+
 
     /**
      * Obtener todos los residentes (con filtros y paginación)
@@ -361,25 +401,55 @@ export const residentsController = {
      * Actualizar estado de recepción (desde app móvil)
      */
     updateReceptionStatus: catchAsync(async (req, res) => {
-        const residenteId = req.residenteId; // Del middleware requireResidentMobileAccess
-        const { recibiendo_visitas, recibiendo_personal } = req.body;
+    const residenteId = req.residenteId;
+    const { recibiendo_visitas, recibiendo_personal } = req.body;
 
-        const estado = await EstadoRecepcion.findOneAndUpdate(
-            { residente_id: residenteId },
-            { 
-                recibiendo_visitas, 
-                recibiendo_personal,
-                ultima_modificacion_por: req.userId
-            },
-            { new: true, upsert: true }
-        );
-
-        res.json({
-            success: true,
-            message: 'Estado de recepción actualizado',
-            estado_recepcion: estado
+    // Validar que al menos uno venga en el body
+    if (typeof recibiendo_visitas === 'undefined' && 
+        typeof recibiendo_personal === 'undefined') {
+        return res.status(400).json({
+            success: false,
+            message: 'Se requiere al menos uno de los campos: recibiendo_visitas, recibiendo_personal'
         });
-    }),
+    }
+
+    // Buscar o crear estado de recepción
+    const estado = await EstadoRecepcion.findOne({ residente_id: residenteId });
+    
+    let estadoActualizado;
+    if (estado) {
+        // Actualizar campos que vienen en el request
+        if (typeof recibiendo_visitas !== 'undefined') {
+            estado.recibiendo_visitas = recibiendo_visitas;
+        }
+        if (typeof recibiendo_personal !== 'undefined') {
+            estado.recibiendo_personal = recibiendo_personal;
+        }
+        
+        estado.ultima_modificacion_por = req.userId;
+        estadoActualizado = await estado.save();
+    } else {
+        // Crear nuevo estado
+        estadoActualizado = await EstadoRecepcion.create({
+            residente_id: residenteId,
+            recibiendo_visitas: recibiendo_visitas !== undefined ? recibiendo_visitas : true,
+            recibiendo_personal: recibiendo_personal !== undefined ? recibiendo_personal : true,
+            ultima_modificacion_por: req.userId
+        });
+    }
+
+    // Notificar al personal de caseta (en producción usar WebSockets)
+    console.log(`📢 Residente ${residenteId} cambió estado recepción: `, {
+        recibiendo_visitas: estadoActualizado.recibiendo_visitas,
+        recibiendo_personal: estadoActualizado.recibiendo_personal
+    });
+
+    res.json({
+        success: true,
+        message: 'Estado de recepción actualizado',
+        estado_recepcion: estadoActualizado
+    });
+}),
 
     /**
      * Obtener estado de recepción del residente
@@ -983,81 +1053,36 @@ export const residentsController = {
      */
     reactivateResident: catchAsync(async (req, res) => {
         const { id } = req.params;
-        const { motivo = 'Reactivación manual' } = req.body;
+        const { motivo = 'Reactivación por administrador' } = req.body;
 
-        const residente = await Residente.findById(id)
-            .populate('user_id');
-        
+        // Buscar residente inactivo
+        const residente = await Residente.findOne({
+            _id: id,
+            estatus: 'inactivo'
+        });
+
         if (!residente) {
             return res.status(404).json({
                 success: false,
-                message: 'Residente no encontrado'
+                message: 'Residente inactivo no encontrado'
             });
         }
 
-        // Verificar que esté suspendido o inactivo
-        if (residente.estatus === 'activo') {
-            return res.status(400).json({
-                success: false,
-                message: 'El residente ya está activo'
-            });
-        }
-
-        // Guardar estado anterior
-        const estadoAnterior = residente.estatus;
+        const domicilio_id = residente.domicilio_id;
 
         // Reactivar residente
         residente.estatus = 'activo';
         await residente.save();
 
-        // Reactivar usuario
-        await User.findByIdAndUpdate(residente.user_id._id, {
-            estatus: 'activo'
-        });
-
-        // Actualizar morosidad si estaba suspendido por eso
-        const morosidad = await ResidenteMorosidad.findOne({ residente_id: id });
-        if (morosidad && morosidad.suspendido_por_morosidad) {
-            morosidad.suspendido_por_morosidad = false;
-            morosidad.motivo_suspension = `${morosidad.motivo_suspension} - Reactivado: ${motivo}`;
-            await morosidad.save();
-        }
-
-        // Registrar auditoría
-        const { AuditoriaGeneral } = await import('../models/auditoriaGeneral.model.js');
-        await AuditoriaGeneral.create({
-            usuario_id: req.userId,
-            accion: 'REACTIVAR_RESIDENTE',
-            detalle: {
-                residente_id: residente._id,
-                motivo,
-                estado_anterior: estadoAnterior,
-                estado_nuevo: 'activo'
-            },
-            ip: req.ip
-        });
-
-        // Notificar al residente
-        await NotificationService.sendNotification({
-            userId: residente.user_id._id,
-            tipo: 'push',
-            titulo: '✅ Cuenta reactivada',
-            mensaje: `Tu acceso ha sido reactivado. Motivo: ${motivo}`,
-            data: { 
-                tipo: 'resident', 
-                action: 'reactivated',
-                motivo
-            }
-        });
+        // ============ ACTUALIZAR ESTATUS DEL DOMICILIO ============
+        await DomicilioStatusService.updateDomicilioStatus(domicilio_id);
 
         res.json({
             success: true,
             message: 'Residente reactivado exitosamente',
             residente: {
                 id: residente._id,
-                nombre: `${residente.user_id.nombre} ${residente.user_id.apellido}`,
                 estatus: residente.estatus,
-                estado_anterior: estadoAnterior,
                 fecha_reactivacion: new Date()
             }
         });

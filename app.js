@@ -29,6 +29,5 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/api', routes);
 
 // Middleware de manejo de errores
-app.use(errorHandler);
 
 export default app;

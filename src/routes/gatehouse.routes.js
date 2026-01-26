@@ -6,6 +6,8 @@ import {
     requireRole,
     validateObjectId
 } from '../middlewares/index.js';
+import { eventsController } from '../controllers/events.controller.js';
+
 
 const router = Router();
 
@@ -102,6 +104,27 @@ router.post(
 router.post(
     '/register-exit',
     visitsController.registerVisitExit
+);
+
+
+/**
+ * @route   POST /api/gatehouse/register-event-access
+ * @desc    Registrar acceso para evento con QR compartido
+ * @access  Private (Caseta, Administrador)
+ */
+router.post(
+    '/register-event-access',
+    eventsController.registerEventAccess
+);
+
+/**
+ * @route   GET /api/gatehouse/upcoming-events
+ * @desc    Obtener eventos próximos para pantalla de caseta
+ * @access  Private (Caseta, Administrador)
+ */
+router.get(
+    '/upcoming-events',
+    eventsController.getUpcomingEventsForGatehouse
 );
 
 export default router;

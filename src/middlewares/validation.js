@@ -1,5 +1,7 @@
 import Validators from '../libs/validators.js';
 import Utils from '../libs/utils.js';
+import mongoose from 'mongoose';
+import { validationResult } from 'express-validator';
 
 /**
  * Middleware para validar datos de entrada
@@ -8,6 +10,22 @@ import Utils from '../libs/utils.js';
 /**
  * Valida datos de creación de usuario
  */
+export const validateRequest = (req, res, next) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({
+            success: false,
+            message: 'Errores de validación',
+            errors: errors.array().map(err => ({
+                field: err.path,
+                message: err.msg,
+                value: err.value
+            }))
+        });
+    }
+    next();
+};
+
 export const validateCreateUser = (req, res, next) => {
     const { email, password, nombre, apellido, telefono } = req.body;
     const errors = [];
@@ -54,6 +72,109 @@ export const validateCreateUser = (req, res, next) => {
     
     if (telefono) {
         req.body.telefono = Utils.formatMexicanPhone(telefono);
+    }
+
+    next();
+};
+
+export const validateCreatePersonal = (req, res, next) => {
+    const {
+        nombre,
+        tipo_servicio,
+        frecuencia,
+        fecha_inicio,
+        fecha_fin
+    } = req.body;
+
+    const errors = [];
+
+    if (!nombre || nombre.trim().length < 2) {
+        errors.push('Nombre del personal requerido (mínimo 2 caracteres)');
+    }
+
+    if (!tipo_servicio || tipo_servicio.trim().length < 2) {
+        errors.push('Tipo de servicio requerido');
+    }
+
+    // Validar frecuencia
+    if (frecuencia) {
+        const tiposFrecuencia = ['diario', 'semanal', 'quincenal', 'mensual', 'fecha_especifica'];
+        if (!tiposFrecuencia.includes(frecuencia.tipo)) {
+            errors.push(`Tipo de frecuencia inválido. Permitidos: ${tiposFrecuencia.join(', ')}`);
+        }
+
+        if (frecuencia.tipo === 'semanal' && frecuencia.dias_semana) {
+            for (const dia of frecuencia.dias_semana) {
+                if (dia < 0 || dia > 6) {
+                    errors.push('Días de la semana deben estar entre 0 (Domingo) y 6 (Sábado)');
+                    break;
+                }
+            }
+        }
+    }
+
+    if (!fecha_inicio) {
+        errors.push('Fecha de inicio requerida');
+    }
+
+    if (!fecha_fin) {
+        errors.push('Fecha de fin requerida');
+    }
+
+    if (fecha_inicio && fecha_fin && new Date(fecha_inicio) >= new Date(fecha_fin)) {
+        errors.push('La fecha de fin debe ser posterior a la fecha de inicio');
+    }
+
+    if (errors.length > 0) {
+        return res.status(400).json({
+            success: false,
+            message: 'Errores de validación',
+            errors
+        });
+    }
+
+    next();
+};
+
+/**
+ * Valida datos de creación de evento
+ */
+export const validateCreateEvent = (req, res, next) => {
+    const {
+        nombre_evento,
+        fecha_inicio,
+        fecha_fin,
+        max_invitados
+    } = req.body;
+
+    const errors = [];
+
+    if (!nombre_evento || nombre_evento.trim().length < 3) {
+        errors.push('Nombre del evento requerido (mínimo 3 caracteres)');
+    }
+
+    if (!fecha_inicio) {
+        errors.push('Fecha de inicio requerida');
+    }
+
+    if (!fecha_fin) {
+        errors.push('Fecha de fin requerida');
+    }
+
+    if (fecha_inicio && fecha_fin && new Date(fecha_inicio) >= new Date(fecha_fin)) {
+        errors.push('La fecha de fin debe ser posterior a la fecha de inicio');
+    }
+
+    if (max_invitados !== undefined && (isNaN(max_invitados) || max_invitados < 0)) {
+        errors.push('Máximo de invitados debe ser un número mayor o igual a 0');
+    }
+
+    if (errors.length > 0) {
+        return res.status(400).json({
+            success: false,
+            message: 'Errores de validación',
+            errors
+        });
     }
 
     next();
@@ -118,6 +239,13 @@ export const validateCreateResident = (req, res, next) => {
     next();
 };
 
+function getTodayLocal() {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
 
 /**
  * Valida datos de autorización de visita
@@ -154,7 +282,7 @@ export const validateVisitAuthorization = (req, res, next) => {
 
     // Comparaciones seguras (YYYY-MM-DD)
     if (fecha_inicio_vigencia && fecha_fin_vigencia) {
-        const today = new Date().toISOString().split('T')[0];
+        const today = getTodayLocal();
 
         if (fecha_inicio_vigencia < today) {
             errors.push('La fecha de inicio no puede ser en el pasado');
@@ -165,16 +293,18 @@ export const validateVisitAuthorization = (req, res, next) => {
         }
     }
 
-    // Validar límite de ingresos
     if (limite_ingresos !== undefined) {
-        if (
-            typeof limite_ingresos !== 'number' ||
-            limite_ingresos < 1 ||
-            limite_ingresos > 1000
-        ) {
-            errors.push('El límite de ingresos debe estar entre 1 y 1000');
-        }
+    const limite = Number(limite_ingresos);
+
+    if (
+        Number.isNaN(limite) ||
+        limite < 1 ||
+        limite > 1000
+    ) {
+        errors.push('El límite de ingresos debe estar entre 1 y 1000');
     }
+}
+
 
     if (errors.length > 0) {
         return res.status(400).json({
@@ -203,14 +333,13 @@ export const validatePaymentReceipt = (req, res, next) => {
         institucion_bancaria
     } = req.body;
 
+    console.log(
+        tipo_cargo
+    )
+
     const errors = [];
 
     // Validar tipo de cargo
-    const tiposPermitidos = ['mantenimiento', 'extraordinario', 'multa'];
-    if (!tipo_cargo || !tiposPermitidos.includes(tipo_cargo)) {
-        errors.push(`Tipo de cargo inválido. Permitidos: ${tiposPermitidos.join(', ')}`);
-    }
-
     // Validar monto
     if (!Validators.isValidAmount(monto_total)) {
         errors.push('Monto total inválido');

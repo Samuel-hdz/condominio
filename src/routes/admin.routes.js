@@ -183,4 +183,26 @@ router.get(
     adminController.getSystemInfo
 );
 
+/**
+ * @route   POST /api/admin/domicilios/verify-status
+ * @desc    Verificar y corregir estatus de domicilios manualmente
+ * @access  Private (Administrador)
+ */
+router.post(
+    '/domicilios/verify-status',
+    auditAdminActions(),
+    adminController.verifyDomiciliosStatus
+);
+
+/**
+ * @route   GET /api/admin/domicilios/stats
+ * @desc    Obtener estadísticas de domicilios
+ * @access  Private (Administrador, Comité)
+ */
+router.get(
+    '/domicilios/stats',
+    requirePermission('/admin', 'ver'),
+    adminController.getDomiciliosStats
+);
+
 export default router;

@@ -254,7 +254,20 @@ class Utils {
             return `+52 ${cleaned}`;
         }
         
-        return null;
+        return cleaned;
+    }
+
+    /**
+     * Verifica si es día hábil
+     */
+    static isBusinessDay(date = new Date()) {
+        const day = date.getDay();
+        return day >= 1 && day <= 5; // Lunes a Viernes
+    }
+
+    static daysBetween(date1, date2) {
+        const oneDay = 24 * 60 * 60 * 1000;
+        return Math.round(Math.abs((date1 - date2) / oneDay));
     }
 
     /**
