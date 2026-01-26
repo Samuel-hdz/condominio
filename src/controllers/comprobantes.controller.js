@@ -10,6 +10,8 @@ import Utils from '../libs/utils.js';
 import fs from 'fs';
 import path from 'path';
 import mongoose from 'mongoose';
+import ComprobanteGenerator from '../libs/comprobanteGenerator.js';
+
 
 export const comprobantesController = {
     /**
@@ -123,39 +125,48 @@ export const comprobantesController = {
         // Obtener pagos aplicados a este comprobante
         const pagosAplicados = await PagoAplicado.find({ 
             comprobante_id: comprobante._id 
-        }).populate('cargo_domicilio_id');
-
-        // Obtener cargos pendientes del residente para posible asignación
-        const cargosPendientes = await CargoDomicilio.find({
-            domicilio_id: comprobante.residente_id.domicilio_id._id,
-            saldo_pendiente: { $gt: 0 },
-            estatus: { $in: ['pendiente', 'vencido'] }
-        })
-        .populate('cargo_id', 'nombre descripcion fecha_vencimiento')
-        .populate({
-            path: 'cargo_id',
+        }).populate({
+            path: 'cargo_domicilio_id',
             populate: {
-                path: 'tipo_cargo_id',
-                select: 'nombre tipo'
+                path: 'cargo_id',
+                select: 'nombre descripcion fecha_vencimiento'
             }
         });
+
+        // Verificar si ya existe PDF generado
+        let pdfInfo = null;
+        if (comprobante.comprobante_final_url) {
+            const fs = await import('fs');
+            const path = await import('path');
+            
+            const filePath = path.join(
+                __dirname, 
+                '..', 
+                '..', 
+                '..', 
+                comprobante.comprobante_final_url.startsWith('/') 
+                    ? comprobante.comprobante_final_url.substring(1) 
+                    : comprobante.comprobante_final_url
+            );
+            
+            pdfInfo = {
+                url: comprobante.comprobante_final_url,
+                exists: fs.existsSync(filePath),
+                can_download: comprobante.estatus === 'aprobado',
+                can_view: comprobante.estatus === 'aprobado',
+                file_size: fs.existsSync(filePath) 
+                    ? Math.round(fs.statSync(filePath).size / 1024) + ' KB' 
+                    : 'N/A'
+            };
+        }
 
         res.json({
             success: true,
             comprobante: {
                 ...comprobante.toObject(),
                 pagos_aplicados: pagosAplicados,
-                cargos_disponibles: cargosPendientes.map(cargo => ({
-                    id: cargo._id,
-                    cargo_id: cargo.cargo_id._id,
-                    nombre: cargo.cargo_id.nombre,
-                    tipo: cargo.cargo_id.tipo_cargo_id.tipo,
-                    fecha_vencimiento: cargo.cargo_id.fecha_vencimiento,
-                    saldo_pendiente: cargo.saldo_pendiente,
-                    monto_final: cargo.monto_final
-                })),
-                saldo_disponible: comprobante.monto_total - 
-                    pagosAplicados.reduce((sum, pa) => sum + pa.monto_aplicado, 0)
+                pdf_info: pdfInfo,
+                total_aplicado: pagosAplicados.reduce((sum, pa) => sum + pa.monto_aplicado, 0)
             }
         });
     }),
@@ -167,9 +178,28 @@ export const comprobantesController = {
     const { id } = req.params;
     const { comentarios } = req.body || {};
 
+    console.log(`✅ Aprobando comprobante ${id} y generando PDF...`);
+
+    // 1. BUSCAR COMPROBANTE CON TODAS LAS POBLACIONES NECESARIAS
     const comprobante = await ComprobantePago.findById(id)
         .populate('cargo_domicilio_id')
-        .populate('residente_id');
+        .populate({
+            path: 'residente_id',
+            populate: [
+                { 
+                    path: 'user_id', 
+                    select: 'nombre apellido email' 
+                },
+                { 
+                    path: 'domicilio_id',
+                    populate: {
+                        path: 'calle_torre_id',
+                        select: 'nombre tipo'
+                    }
+                }
+            ]
+        })
+        .populate('usuario_aprobador_id', 'nombre apellido');
     
     if (!comprobante) {
         return res.status(404).json({
@@ -178,6 +208,7 @@ export const comprobantesController = {
         });
     }
 
+    // 2. VERIFICAR ESTATUS
     if (comprobante.estatus !== 'pendiente') {
         return res.status(400).json({
             success: false,
@@ -189,62 +220,240 @@ export const comprobantesController = {
     session.startTransaction();
 
     try {
-        const cargoDomicilio = comprobante.cargo_domicilio_id;
-        const montoPago = comprobante.monto_total;
+        // 3. BUSCAR PAGOS APLICADOS EXISTENTES
+        let pagosAplicados = await PagoAplicado.find({
+            comprobante_id: comprobante._id
+        })
+        .populate({
+            path: 'cargo_domicilio_id',
+            populate: {
+                path: 'cargo_id',
+                select: 'nombre descripcion'
+            }
+        })
+        .session(session);
 
-        // Verificar que el saldo pendiente aún sea suficiente
-        if (montoPago > cargoDomicilio.saldo_pendiente) {
-            throw new Error(`El pago excede el saldo pendiente del cargo. Saldo actual: ${cargoDomicilio.saldo_pendiente}`);
+        console.log(`🔍 PagoAplicados encontrados: ${pagosAplicados.length}`);
+
+        // 4. SI NO HAY PAGOS APLICADOS, CREAR UNO AUTOMÁTICAMENTE
+        if (pagosAplicados.length === 0) {
+            console.log(`⚠️ No hay pagos aplicados, creando automáticamente...`);
+            
+            if (!comprobante.cargo_domicilio_id) {
+                throw new Error('El comprobante no tiene un cargo domicilio asociado');
+            }
+
+            const pagoAplicado = await PagoAplicado.create([{
+                comprobante_id: comprobante._id,
+                cargo_domicilio_id: comprobante.cargo_domicilio_id._id,
+                monto_aplicado: comprobante.monto_total,
+                tipo_asignacion: 'automatica',
+                usuario_asignador_id: req.userId,
+                notas: 'Creado automáticamente al aprobar comprobante'
+            }], { session });
+
+            // Recargar el pago con populate
+            const pagoConPopulate = await PagoAplicado.findById(pagoAplicado[0]._id)
+                .populate({
+                    path: 'cargo_domicilio_id',
+                    populate: {
+                        path: 'cargo_id',
+                        select: 'nombre descripcion'
+                    }
+                })
+                .session(session);
+            
+            pagosAplicados = [pagoConPopulate];
+            console.log(`✅ PagoAplicado creado: ${pagoAplicado[0]._id}`);
         }
 
-        // Crear pago aplicado automáticamente
-        const pagoAplicado = await PagoAplicado.create([{
-            comprobante_id: comprobante._id,
-            cargo_domicilio_id: cargoDomicilio._id,
-            monto_aplicado: montoPago,
-            tipo_asignacion: 'automatica',
-            usuario_asignador_id: req.userId
-        }], { session });
-
-        // Actualizar cargo domicilio
-        cargoDomicilio.saldo_pendiente -= montoPago;
-        if (cargoDomicilio.saldo_pendiente <= 0) {
-            cargoDomicilio.estatus = 'pagado';
-            cargoDomicilio.fecha_pago = new Date();
+        // 5. VERIFICAR MONTO TOTAL
+        const totalPagosAplicados = pagosAplicados.reduce((sum, pago) => sum + pago.monto_aplicado, 0);
+        const diferencia = Math.abs(totalPagosAplicados - comprobante.monto_total);
+        
+        if (diferencia > 0.01) {
+            throw new Error(`El monto del comprobante (${comprobante.monto_total}) no coincide con la suma de pagos aplicados (${totalPagosAplicados})`);
         }
-        await cargoDomicilio.save({ session });
 
-        // Actualizar comprobante
+        // 6. ACTUALIZAR CARGOS DOMICILIO
+        const cargosActualizados = [];
+        
+        for (const pago of pagosAplicados) {
+            const cargoDomicilio = pago.cargo_domicilio_id;
+            
+            if (!cargoDomicilio) {
+                throw new Error(`Cargo domicilio no encontrado para pago ${pago._id}`);
+            }
+
+            console.log(`📊 Procesando cargo: ${cargoDomicilio.cargo_id?.nombre || 'N/A'}`);
+            console.log(`   Saldo anterior: ${cargoDomicilio.saldo_pendiente}`);
+            console.log(`   Monto a aplicar: ${pago.monto_aplicado}`);
+
+            // Verificar que el monto no excede saldo
+            if (pago.monto_aplicado > cargoDomicilio.saldo_pendiente) {
+                throw new Error(`El pago de ${pago.monto_aplicado} excede el saldo pendiente (${cargoDomicilio.saldo_pendiente}) del cargo "${cargoDomicilio.cargo_id?.nombre || 'N/A'}"`);
+            }
+
+            // Actualizar saldo
+            cargoDomicilio.saldo_pendiente -= pago.monto_aplicado;
+            
+            // Cambiar estatus si se pagó completamente
+            if (cargoDomicilio.saldo_pendiente <= 0) {
+                cargoDomicilio.estatus = 'pagado';
+                cargoDomicilio.fecha_pago = new Date();
+                console.log(`   ✅ Cargo completamente pagado`);
+            } else {
+                console.log(`   ✅ Saldo nuevo: ${cargoDomicilio.saldo_pendiente}`);
+            }
+            
+            await cargoDomicilio.save({ session });
+            
+            cargosActualizados.push({
+                cargo_id: cargoDomicilio._id,
+                nombre: cargoDomicilio.cargo_id?.nombre,
+                saldo_anterior: cargoDomicilio.saldo_pendiente + pago.monto_aplicado,
+                saldo_nuevo: cargoDomicilio.saldo_pendiente,
+                monto_aplicado: pago.monto_aplicado,
+                pagado_completamente: cargoDomicilio.saldo_pendiente <= 0
+            });
+        }
+
+        // 7. ACTUALIZAR COMPROBANTE
         comprobante.estatus = 'aprobado';
         comprobante.fecha_aprobacion = new Date();
         comprobante.usuario_aprobador_id = req.userId;
         comprobante.observaciones = comentarios || comprobante.observaciones;
+
+        // 8. ✅ GENERAR COMPROBANTE PDF
+        console.log(`📄 Generando comprobante PDF para ${comprobante.folio}...`);
         
-        // Generar comprobante final
-        comprobante.comprobante_final_url = comprobantesController.generateComprobanteFinal(comprobante, [pagoAplicado[0]]);
+        // OPCION 1: Si ComprobanteGenerator está importado correctamente
+        let comprobantePDF;
+try {
+    comprobantePDF = await ComprobanteGenerator.generateComprobante(
+        comprobante,
+        pagosAplicados
+    );
+} catch (pdfError) {
+    console.error('❌ Error generando PDF:', pdfError);
+    await session.abortTransaction();
+    throw new Error(`No se pudo generar el comprobante PDF: ${pdfError.message}`);
+}
+        
+        // Guardar URL del comprobante generado
+        comprobante.comprobante_final_url = comprobantePDF.url;
         await comprobante.save({ session });
 
+        // 9. CONFIRMAR TRANSACCIÓN
         await session.commitTransaction();
+        console.log(`✅ Comprobante ${comprobante.folio} aprobado y PDF generado: ${comprobantePDF.fileName}`);
 
-        // Notificaciones... (igual que antes)
+        // ========== OPERACIONES FUERA DE TRANSACCIÓN ==========
 
+        // 10. NOTIFICAR AL RESIDENTE
+        let notificacionEnviada = false;
+        try {
+            const residente = await Residente.findById(comprobante.residente_id._id)
+                .populate('user_id');
+            
+            if (residente && residente.user_id) {
+                await NotificationService.sendNotification({
+                    userId: residente.user_id._id,
+                    tipo: 'push',
+                    titulo: '✅ Pago aprobado',
+                    mensaje: `Tu comprobante ${comprobante.folio} ha sido aprobado. Se ha generado tu recibo oficial.`,
+                    data: {
+                        tipo: 'comprobante',
+                        action: 'approved',
+                        comprobante_id: comprobante._id,
+                        comprobante_url: comprobante.comprobante_final_url,
+                        folio: comprobante.folio,
+                        monto_total: comprobante.monto_total,
+                        fecha_aprobacion: comprobante.fecha_aprobacion
+                    },
+                    accionRequerida: true,
+                    accionTipo: 'descargar_comprobante',
+                    accionData: { 
+                        comprobanteId: comprobante._id,
+                        pdfUrl: comprobante.comprobante_final_url 
+                    }
+                });
+                
+                notificacionEnviada = true;
+                console.log(`📨 Notificación enviada a residente: ${residente.user_id?.email || 'N/A'}`);
+            }
+        } catch (notifError) {
+            console.warn('⚠️ Error enviando notificación al residente:', notifError.message);
+        }
+
+        // 11. RESPUESTA EXITOSA
         res.json({
             success: true,
-            message: 'Comprobante aprobado exitosamente',
+            message: 'Comprobante aprobado exitosamente. Comprobante PDF generado.',
             comprobante: {
                 id: comprobante._id,
                 folio: comprobante.folio,
                 estatus: comprobante.estatus,
                 monto_total: comprobante.monto_total,
-                cargo_afectado: cargoDomicilio.cargo_id
+                comprobante_final_url: comprobante.comprobante_final_url,
+                fecha_aprobacion: comprobante.fecha_aprobacion,
+                aprobado_por: {
+                    id: req.userId,
+                    nombre: req.user?.nombre || 'Administrador'
+                }
+            },
+            detalles: {
+                pagos_aplicados: pagosAplicados.length,
+                cargos_afectados: cargosActualizados.length,
+                pdf_generado: true,
+                nombre_pdf: comprobantePDF.fileName,
+                notificacion_enviada: notificacionEnviada,
+                cargos_actualizados: cargosActualizados
             }
         });
 
     } catch (error) {
-        await session.abortTransaction();
-        throw error;
+        // 12. MANEJO DE ERRORES
+        console.error('❌ Error aprobando comprobante:', error.message);
+        console.error('❌ Stack trace:', error.stack);
+        
+        if (session && session.inTransaction()) {
+            try {
+                await session.abortTransaction();
+                console.log('🔄 Transacción abortada');
+            } catch (abortError) {
+                console.error('❌ Error abortando transacción:', abortError.message);
+            }
+        }
+        
+        // Determinar código de error apropiado
+        let statusCode = 500;
+        let errorMessage = 'Error al aprobar el comprobante';
+        
+        if (error.message.includes('no tiene un cargo domicilio') || 
+            error.message.includes('excede el saldo') ||
+            error.message.includes('no coincide')) {
+            statusCode = 400;
+            errorMessage = error.message;
+        } else if (error.message.includes('no encontrado')) {
+            statusCode = 404;
+            errorMessage = error.message;
+        }
+        
+        res.status(statusCode).json({
+            success: false,
+            message: errorMessage,
+            error_details: process.env.NODE_ENV === 'development' ? {
+                message: error.message,
+                comprobante_id: id
+            } : undefined
+        });
+        
     } finally {
-        session.endSession();
+        // 13. LIMPIEZA
+        if (session) {
+            await session.endSession();
+        }
     }
 }),
 
@@ -289,37 +498,23 @@ export const comprobantesController = {
         const residente = await Residente.findById(comprobante.residente_id)
             .populate('user_id');
         
-        await NotificationService.sendNotification({
-            userId: residente.user_id._id,
-            tipo: 'push',
-            titulo: '❌ Comprobante rechazado',
-            mensaje: `Tu comprobante de pago ha sido rechazado: ${motivo_rechazo}`,
-            data: {
-                tipo: 'comprobante',
-                action: 'rejected',
-                comprobante_id: comprobante._id,
-                motivo: motivo_rechazo,
-                monto: comprobante.monto_total
-            },
-            accionRequerida: true,
-            accionTipo: 'ver_comprobante',
-            accionData: { comprobanteId: comprobante._id }
-        });
-
-        // Notificar a administradores
-        const admins = await User.find({ role: 'administrador', _id: { $ne: req.userId } });
-        for (const admin of admins) {
+        if (residente && residente.user_id) {
             await NotificationService.sendNotification({
-                userId: admin._id,
-                tipo: 'in_app',
+                userId: residente.user_id._id,
+                tipo: 'push',
                 titulo: '❌ Comprobante rechazado',
-                mensaje: `${req.user.nombre} rechazó un comprobante`,
+                mensaje: `Tu comprobante de pago ha sido rechazado: ${motivo_rechazo}`,
                 data: {
                     tipo: 'comprobante',
                     action: 'rejected',
                     comprobante_id: comprobante._id,
-                    motivo: motivo_rechazo
-                }
+                    motivo: motivo_rechazo,
+                    monto: comprobante.monto_total,
+                    fecha_rechazo: new Date()
+                },
+                accionRequerida: true,
+                accionTipo: 'ver_comprobante',
+                accionData: { comprobanteId: comprobante._id }
             });
         }
 
@@ -330,7 +525,8 @@ export const comprobantesController = {
                 id: comprobante._id,
                 folio: comprobante.folio,
                 estatus: comprobante.estatus,
-                motivo_rechazo: comprobante.motivo_rechazo
+                motivo_rechazo: comprobante.motivo_rechazo,
+                fecha_rechazo: new Date()
             }
         });
     }),

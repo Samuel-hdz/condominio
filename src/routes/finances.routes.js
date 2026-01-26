@@ -29,6 +29,13 @@ import { CargoDomicilio } from '../models/cargoDomicilio.model.js';
 import { PagoAplicado } from '../models/pagoAplicado.model.js';
 import NotificationService from '../libs/notifications.js';
 
+import ComprobanteGenerator from '../libs/comprobanteGenerator.js';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 // Configurar multer para upload de archivos
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
@@ -641,8 +648,7 @@ adminRoutes.post(
     upload.single('comprobante'),
     validateManualPayment,
     async (req, res) => {
-        console.log('🚀 INICIANDO NUEVO PAGO MANUAL');
-        console.log('📦 Body recibido:', JSON.stringify(req.body, null, 2));
+        console.log('🚀 INICIANDO NUEVO PAGO MANUAL CON GENERACIÓN DE COMPROBANTE');
         
         const {
             residente_id,
@@ -655,19 +661,6 @@ adminRoutes.post(
             asignaciones = [],
             observaciones
         } = req.body;
-
-        console.log(`👤 Residente ID: ${residente_id}`);
-        console.log(`💰 Monto total: ${monto}`);
-        console.log(`📅 Fecha pago: ${fecha_pago}`);
-        console.log(`💳 Método: ${metodo_pago}`);
-        console.log(`🎯 Asignaciones: ${asignaciones.length}`);
-
-        if (asignaciones && asignaciones.length > 0) {
-            console.log('📋 Detalle asignaciones:');
-            asignaciones.forEach((a, i) => {
-                console.log(`  ${i+1}. Cargo ID: ${a.cargo_domicilio_id}, Monto: ${a.monto}`);
-            });
-        }
 
         const session = await mongoose.startSession();
         let transaccionActiva = false;
@@ -689,12 +682,9 @@ adminRoutes.post(
             }
 
             console.log(`✅ Residente encontrado: ${residente.user_id?.nombre || 'N/A'}`);
-            console.log(`🏠 Domicilio ID: ${residente.domicilio_id?._id}`);
 
             // 2. VERIFICAR MONTO
             const montoNum = parseFloat(monto);
-            console.log(`🔢 Monto numérico: ${montoNum}`);
-            
             if (montoNum <= 0) {
                 console.error('❌ Monto inválido:', montoNum);
                 await session.endSession();
@@ -708,15 +698,11 @@ adminRoutes.post(
             console.log('🔄 Iniciando transacción...');
             session.startTransaction();
             transaccionActiva = true;
-            console.log('✅ Transacción iniciada');
 
-            // 4. CREAR COMPROBANTE
+            // 4. CREAR COMPROBANTE INICIAL
             console.log('📝 Creando comprobante...');
             const comprobanteData = {
                 residente_id,
-                cargo_domicilio_id: asignaciones && asignaciones.length > 0 
-                    ? asignaciones[0].cargo_domicilio_id 
-                    : null,
                 monto_total: montoNum,
                 fecha_pago: new Date(fecha_pago),
                 metodo_pago,
@@ -725,67 +711,42 @@ adminRoutes.post(
                 cuenta_destino: cuenta_destino || null,
                 comprobante_url: req.file ? req.file.path : '/uploads/comprobantes/dummy.pdf',
                 observaciones: observaciones || '',
-                estatus: 'aprobado',
+                estatus: 'aprobado', // Directamente aprobado porque es manual del admin
                 fecha_aprobacion: new Date(),
                 usuario_aprobador_id: req.userId
             };
-
-            console.log('📄 Datos del comprobante:', comprobanteData);
 
             const comprobante = await ComprobantePago.create([comprobanteData], { session });
             console.log(`✅ Comprobante creado: ${comprobante[0]._id}, Folio: ${comprobante[0].folio}`);
 
             let totalAsignado = 0;
             const pagosAplicados = [];
-            let cargoDomicilioPrincipal = null;
+            const cargosDomicilioIds = [];
 
-            // 5. PROCESAR ASIGNACIONES
+            // 5. PROCESAR ASIGNACIONES MANUALES O AUTOMÁTICAS
             if (asignaciones && asignaciones.length > 0) {
                 console.log('🎯 Procesando asignaciones manuales...');
                 
-                // FLUJO 1: ASIGNACIÓN MANUAL EXPLÍCITA
-                for (const [index, asignacion] of asignaciones.entries()) {
-                    console.log(`\n📌 Procesando asignación ${index + 1}/${asignaciones.length}:`);
-                    console.log(`   Cargo ID: ${asignacion.cargo_domicilio_id}`);
-                    console.log(`   Monto: ${asignacion.monto}`);
-
-                    // Buscar cargo DOMICILIO - ¡IMPORTANTE! Es CargoDomicilio, no Cargo
-                    const cargoDomicilio = await CargoDomicilio.findById(
-                        asignacion.cargo_domicilio_id
-                    ).session(session);
+                for (const asignacion of asignaciones) {
+                    const cargoDomicilio = await CargoDomicilio.findById(asignacion.cargo_domicilio_id)
+                        .session(session);
 
                     if (!cargoDomicilio) {
-                        console.error(`❌ CargoDomicilio no encontrado: ${asignacion.cargo_domicilio_id}`);
                         throw new Error(`Cargo no encontrado: ${asignacion.cargo_domicilio_id}`);
                     }
 
-                    console.log(`✅ CargoDomicilio encontrado: ${cargoDomicilio._id}`);
-                    console.log(`   Domicilio ID: ${cargoDomicilio.domicilio_id}`);
-                    console.log(`   Saldo pendiente actual: ${cargoDomicilio.saldo_pendiente}`);
-                    console.log(`   Estatus actual: ${cargoDomicilio.estatus}`);
-                    console.log(`   Cargo ID (padre): ${cargoDomicilio.cargo_id}`);
-
                     // Verificar que el cargo pertenece al residente
                     if (!cargoDomicilio.domicilio_id.equals(residente.domicilio_id._id)) {
-                        console.error(`❌ El cargo no pertenece al residente`);
-                        console.error(`   Domicilio cargo: ${cargoDomicilio.domicilio_id}`);
-                        console.error(`   Domicilio residente: ${residente.domicilio_id._id}`);
-                        throw new Error(`El cargo ${cargoDomicilio._id} no pertenece al residente ${residente_id}`);
+                        throw new Error(`El cargo ${cargoDomicilio._id} no pertenece al residente`);
                     }
 
-                    // Verificar monto
                     const montoAsignacion = parseFloat(asignacion.monto);
-                    console.log(`   Monto a asignar: ${montoAsignacion}`);
                     
                     if (montoAsignacion > cargoDomicilio.saldo_pendiente) {
-                        console.error(`❌ Monto excede saldo pendiente`);
-                        console.error(`   Saldo disponible: ${cargoDomicilio.saldo_pendiente}`);
-                        console.error(`   Monto intentado: ${montoAsignacion}`);
                         throw new Error(`Monto excede saldo pendiente del cargo. Saldo: ${cargoDomicilio.saldo_pendiente}, Intento: ${montoAsignacion}`);
                     }
 
-                    // 1. CREAR PAGO APLICADO PRIMERO
-                    console.log(`💾 Creando PagoAplicado...`);
+                    // Crear PagoAplicado
                     const pagoAplicado = await PagoAplicado.create([{
                         comprobante_id: comprobante[0]._id,
                         cargo_domicilio_id: cargoDomicilio._id,
@@ -795,61 +756,30 @@ adminRoutes.post(
                         notas: `Pago manual registrado por administrador`
                     }], { session });
 
-                    console.log(`✅ PagoAplicado creado: ${pagoAplicado[0]._id}`);
                     pagosAplicados.push(pagoAplicado[0]);
+                    cargosDomicilioIds.push(cargoDomicilio._id);
 
-                    // 2. CALCULAR NUEVOS VALORES
+                    // Actualizar CargoDomicilio
                     const nuevoSaldo = cargoDomicilio.saldo_pendiente - montoAsignacion;
                     const nuevoEstatus = nuevoSaldo <= 0 ? 'pagado' : cargoDomicilio.estatus;
-                    const nuevaFechaPago = nuevoSaldo <= 0 ? new Date() : null;
-
-                    console.log(`🔄 Actualizando CargoDomicilio...`);
-                    console.log(`   Saldo anterior: ${cargoDomicilio.saldo_pendiente}`);
-                    console.log(`   Saldo nuevo: ${nuevoSaldo}`);
-                    console.log(`   Estatus nuevo: ${nuevoEstatus}`);
-
-                    // 3. ACTUALIZAR CARGO DOMICILIO - SOLUCIÓN AL PROBLEMA DE CACHÉ
-                    // Usar updateOne en lugar de save() para evitar problemas de caché
-                    const updateResult = await CargoDomicilio.updateOne(
+                    
+                    await CargoDomicilio.updateOne(
                         { _id: cargoDomicilio._id },
                         {
                             $set: {
                                 saldo_pendiente: nuevoSaldo,
                                 estatus: nuevoEstatus,
-                                ...(nuevaFechaPago && { fecha_pago: nuevaFechaPago })
+                                ...(nuevoSaldo <= 0 && { fecha_pago: new Date() })
                             }
                         },
                         { session }
                     );
 
-                    console.log(`✅ CargoDomicilio actualizado en BD`);
-                    console.log(`   Resultado update:`, {
-                        matched: updateResult.matchedCount,
-                        modified: updateResult.modifiedCount
-                    });
-
-                    // 4. FORZAR RECARGA DEL DOCUMENTO (sin caché de sesión)
-                    const cargoActualizado = await CargoDomicilio.findById(
-                        cargoDomicilio._id
-                    ).session(null).lean(); // session(null) para leer fuera de la transacción
-                    
-                    console.log(`🔍 Verificación directa de BD:`);
-                    console.log(`   ID: ${cargoActualizado._id}`);
-                    console.log(`   Saldo: ${cargoActualizado.saldo_pendiente}`);
-                    console.log(`   Estatus: ${cargoActualizado.estatus}`);
-
-                    // Guardar primer cargo como referencia para el comprobante
-                    if (!cargoDomicilioPrincipal) {
-                        cargoDomicilioPrincipal = cargoDomicilio._id;
-                        console.log(`📌 Cargo principal establecido: ${cargoDomicilioPrincipal}`);
-                    }
-
                     totalAsignado += montoAsignacion;
-                    console.log(`💰 Total asignado acumulado: ${totalAsignado}`);
                 }
             } else {
                 console.log('🤖 Procesando asignación automática por antigüedad...');
-                // FLUJO 2: ASIGNACIÓN AUTOMÁTICA
+                
                 const cargosPendientes = await CargoDomicilio.find({
                     domicilio_id: residente.domicilio_id._id,
                     saldo_pendiente: { $gt: 0 },
@@ -859,23 +789,12 @@ adminRoutes.post(
                 .sort({ 'cargo_id.fecha_vencimiento': 1 })
                 .session(session);
 
-                console.log(`📊 Cargos pendientes encontrados: ${cargosPendientes.length}`);
-
                 let montoRestante = montoNum;
-                console.log(`💰 Monto a distribuir: ${montoRestante}`);
 
-                for (const [index, cargoDomicilio] of cargosPendientes.entries()) {
-                    if (montoRestante <= 0) {
-                        console.log(`⏹️ Monto agotado, deteniendo distribución`);
-                        break;
-                    }
+                for (const cargoDomicilio of cargosPendientes) {
+                    if (montoRestante <= 0) break;
 
                     const montoAAplicar = Math.min(montoRestante, cargoDomicilio.saldo_pendiente);
-                    console.log(`\n📌 Cargo ${index + 1}:`);
-                    console.log(`   ID: ${cargoDomicilio._id}`);
-                    console.log(`   Nombre: ${cargoDomicilio.cargo_id?.nombre}`);
-                    console.log(`   Saldo: ${cargoDomicilio.saldo_pendiente}`);
-                    console.log(`   Aplicar: ${montoAAplicar}`);
 
                     // Crear PagoAplicado
                     const pagoAplicado = await PagoAplicado.create([{
@@ -887,15 +806,10 @@ adminRoutes.post(
                         notas: 'Asignación automática por antigüedad'
                     }], { session });
 
-                    console.log(`✅ PagoAplicado creado: ${pagoAplicado[0]._id}`);
                     pagosAplicados.push(pagoAplicado[0]);
+                    cargosDomicilioIds.push(cargoDomicilio._id);
 
-                    // Guardar primer cargo como referencia
-                    if (!cargoDomicilioPrincipal) {
-                        cargoDomicilioPrincipal = cargoDomicilio._id;
-                    }
-
-                    // Actualizar cargo domicilio usando updateOne (evita problemas de caché)
+                    // Actualizar cargo domicilio
                     const nuevoSaldo = cargoDomicilio.saldo_pendiente - montoAAplicar;
                     const nuevoEstatus = nuevoSaldo <= 0 ? 'pagado' : cargoDomicilio.estatus;
                     
@@ -911,14 +825,11 @@ adminRoutes.post(
                         { session }
                     );
 
-                    console.log(`✅ Cargo actualizado: ${cargoDomicilio.saldo_pendiente} → ${nuevoSaldo}`);
-
                     montoRestante -= montoAAplicar;
                     totalAsignado += montoAAplicar;
-                    console.log(`💰 Monto restante: ${montoRestante}`);
                 }
 
-                // 6. MANEJAR SALDO A FAVOR
+                // Manejar saldo a favor si sobra monto
                 if (montoRestante > 0) {
                     console.log(`💎 Generando saldo a favor: ${montoRestante}`);
                     await SaldoDomicilio.findOneAndUpdate(
@@ -931,88 +842,103 @@ adminRoutes.post(
                         },
                         { upsert: true, new: true, session }
                     );
-                    console.log(`✅ Saldo a favor actualizado`);
                 }
             }
 
-            // 7. ACTUALIZAR COMPROBANTE CON CARGO PRINCIPAL
-            if (cargoDomicilioPrincipal) {
-                comprobante[0].cargo_domicilio_id = cargoDomicilioPrincipal;
-                await comprobante[0].save({ session });
-                console.log(`📌 Comprobante actualizado con cargo principal: ${cargoDomicilioPrincipal}`);
+            // 6. ✅ GENERAR COMPROBANTE PDF
+            console.log('📄 Generando comprobante PDF...');
+            
+            // Popular el comprobante para el generador
+            await comprobante[0].populate([
+                {
+                    path: 'residente_id',
+                    populate: [
+                        { path: 'user_id', select: 'nombre apellido email' },
+                        { 
+                            path: 'domicilio_id', 
+                            populate: {
+                                path: 'calle_torre_id',
+                                select: 'nombre tipo'
+                            }
+                        }
+                    ]
+                },
+                { path: 'usuario_aprobador_id', select: 'nombre apellido' }
+            ]);
+            
+            // Popular pagos aplicados para el generador
+            for (const pago of pagosAplicados) {
+                await pago.populate({
+                    path: 'cargo_domicilio_id',
+                    populate: {
+                        path: 'cargo_id',
+                        select: 'nombre'
+                    }
+                });
             }
 
-            // 8. COMMIT TRANSACCIÓN
+            // Generar el comprobante PDF
+            const comprobantePDF = await ComprobanteGenerator.generateComprobante(
+                comprobante[0],
+                pagosAplicados
+            );
+
+            // Actualizar comprobante con la URL del PDF generado
+            comprobante[0].comprobante_final_url = comprobantePDF.url;
+            await comprobante[0].save({ session });
+            
+            console.log(`✅ Comprobante PDF generado: ${comprobantePDF.fileName}`);
+
+            // 7. COMMIT TRANSACCIÓN
             console.log('✅ Todo OK, confirmando transacción...');
             await session.commitTransaction();
             transaccionActiva = false;
             console.log('🎉 Transacción confirmada exitosamente!');
 
-            // ========== A PARTIR DE AQUÍ: FUERA DE TRANSACCIÓN ==========
-            
-            // 9. VERIFICACIÓN FINAL DESDE LA BD REAL
-            console.log('\n🔍 VERIFICACIÓN FINAL DESDE BD:');
-            if (asignaciones && asignaciones.length > 0) {
-                for (const asignacion of asignaciones) {
-                    // Leer DESPUÉS del commit, sin sesión, para ver datos reales
-                    const cargoFinal = await CargoDomicilio.findById(asignacion.cargo_domicilio_id)
-                        .populate('cargo_id', 'nombre');
-                    
-                    console.log(`   Cargo ${asignacion.cargo_domicilio_id}:`);
-                    console.log(`     - Nombre: ${cargoFinal.cargo_id?.nombre || 'N/A'}`);
-                    console.log(`     - Saldo pendiente: ${cargoFinal.saldo_pendiente}`);
-                    console.log(`     - Estatus: ${cargoFinal.estatus}`);
-                    console.log(`     - Fecha pago: ${cargoFinal.fecha_pago}`);
-                    console.log(`     - Última actualización: ${cargoFinal.updatedAt}`);
-                    
-                    // Verificar si hay pagos aplicados
-                    const pagosDelCargo = await PagoAplicado.find({
-                        cargo_domicilio_id: asignacion.cargo_domicilio_id,
-                        comprobante_id: comprobante[0]._id
-                    });
-                    console.log(`     - Pagos aplicados: ${pagosDelCargo.length}`);
-                }
-            }
-
-            // 10. NOTIFICAR AL RESIDENTE
+            // 8. NOTIFICAR AL RESIDENTE (FUERA DE TRANSACCIÓN)
             let notificacionEnviada = false;
             try {
                 if (residente.user_id && residente.user_id._id) {
                     console.log('📨 Enviando notificación al residente...');
-                    // Asegúrate de que NotificationService esté importado correctamente
-                    if (typeof NotificationService !== 'undefined') {
-                        await NotificationService.sendNotification({
-                            userId: residente.user_id._id,
-                            tipo: 'push',
-                            titulo: '💰 Pago registrado',
-                            mensaje: `Se registró un pago de ${Utils.formatCurrency(montoNum)} a tu cuenta`,
-                            data: {
-                                tipo: 'pago_manual',
-                                action: 'admin_registered',
-                                comprobante_id: comprobante[0]._id,
-                                monto_total: montoNum,
-                                monto_aplicado: totalAsignado,
-                                saldo_favor_generado: montoNum - totalAsignado
-                            }
-                        });
-                        notificacionEnviada = true;
-                        console.log('✅ Notificación enviada');
-                    } else {
-                        console.warn('⚠️ NotificationService no está definido');
-                    }
+                    
+                    await NotificationService.sendNotification({
+                        userId: residente.user_id._id,
+                        tipo: 'push',
+                        titulo: '💰 Pago registrado por administrador',
+                        mensaje: `Se registró un pago de ${Utils.formatCurrency(montoNum)} y se generó tu comprobante ${comprobante[0].folio}`,
+                        data: {
+                            tipo: 'pago_manual',
+                            action: 'admin_registered',
+                            comprobante_id: comprobante[0]._id,
+                            comprobante_url: comprobante[0].comprobante_final_url,
+                            folio: comprobante[0].folio,
+                            monto_total: montoNum,
+                            monto_aplicado: totalAsignado,
+                            saldo_favor_generado: montoNum - totalAsignado
+                        },
+                        accionRequerida: true,
+                        accionTipo: 'descargar_comprobante',
+                        accionData: { 
+                            comprobanteId: comprobante[0]._id,
+                            pdfUrl: comprobante[0].comprobante_final_url 
+                        }
+                    });
+                    
+                    notificacionEnviada = true;
+                    console.log('✅ Notificación enviada');
                 }
             } catch (notifError) {
                 console.warn('⚠️ Error enviando notificación:', notifError.message);
             }
 
-            // 11. RESPUESTA EXITOSA
-            console.log('🏁 Enviando respuesta exitosa al cliente');
+            // 9. RESPUESTA EXITOSA
             res.status(201).json({
                 success: true,
-                message: 'Pago manual registrado exitosamente',
+                message: 'Pago manual registrado exitosamente. Comprobante generado.',
                 data: {
                     comprobante_id: comprobante[0]._id,
                     folio: comprobante[0].folio,
+                    comprobante_pdf_url: comprobante[0].comprobante_final_url,
                     residente: {
                         id: residente._id,
                         nombre: `${residente.user_id?.nombre || ''} ${residente.user_id?.apellido || ''}`.trim()
@@ -1021,72 +947,328 @@ adminRoutes.post(
                     monto_aplicado: totalAsignado,
                     saldo_favor_generado: montoNum - totalAsignado,
                     cargos_afectados: pagosAplicados.length,
-                    cargos_detalle: asignaciones && asignaciones.length > 0 ? 
-                        asignaciones.map(a => ({
-                            cargo_domicilio_id: a.cargo_domicilio_id,
-                            monto_aplicado: parseFloat(a.monto)
-                        })) : 
-                        'Asignación automática',
                     fecha_registro: new Date(),
                     notificacion_enviada: notificacionEnviada,
-                    // INCLUIR DATOS DE VERIFICACIÓN
-                    verificacion: asignaciones && asignaciones.length > 0 ? 
-                        await Promise.all(asignaciones.map(async (a) => {
-                            const cargo = await CargoDomicilio.findById(a.cargo_domicilio_id);
-                            return {
-                                cargo_id: a.cargo_domicilio_id,
-                                saldo_final: cargo.saldo_pendiente,
-                                estatus_final: cargo.estatus
-                            };
-                        })) : []
+                    detalles_generacion: {
+                        pdf_generado: true,
+                        nombre_archivo: comprobantePDF.fileName,
+                        fecha_generacion: new Date()
+                    }
                 }
             });
 
         } catch (error) {
-            // 12. MANEJO DE ERRORES
             console.error('\n❌ ERROR EN PROCESO DE PAGO:');
             console.error('   Mensaje:', error.message);
             console.error('   Stack:', error.stack);
             
-            // Solo abortar si la transacción está activa
             if (session && transaccionActiva) {
                 try {
                     console.log('🔄 Abortando transacción...');
                     await session.abortTransaction();
-                    console.log('✅ Transacción abortada');
                 } catch (abortError) {
                     console.error('❌ Error abortando transacción:', abortError.message);
                 }
             }
             
-            // 13. RESPUESTA DE ERROR DETALLADA
-            console.log('📤 Enviando respuesta de error al cliente');
             res.status(400).json({
                 success: false,
                 message: error.message || 'Error registrando pago manual',
                 error_details: {
                     step: 'processing_payment',
-                    residente_id,
-                    monto,
-                    asignaciones_count: asignaciones?.length || 0,
                     timestamp: new Date().toISOString()
-                },
-                debug: process.env.NODE_ENV === 'development' ? error.stack : undefined
+                }
             });
             
         } finally {
-            // 14. LIMPIEZA
-            try {
-                if (session) {
-                    console.log('🧹 Cerrando sesión de MongoDB...');
-                    await session.endSession();
-                    console.log('✅ Sesión cerrada');
-                }
-            } catch (endError) {
-                console.error('❌ Error cerrando sesión:', endError.message);
+            if (session) {
+                await session.endSession();
             }
+        }
+    }
+);
+
+// -------------------- ENDPOINT PARA DESCARGAR COMPROBANTE --------------------
+/**
+ * @route   GET /api/finances/comprobantes/:id/download
+ * @desc    Descargar comprobante PDF
+ * @access  Private (Residente del comprobante, Administrador)
+ */
+router.get('/comprobantes/:id/download', 
+    authenticate,
+    async (req, res) => {
+        try {
+            const { id } = req.params;
+
+            // 1. BUSCAR COMPROBANTE
+            const comprobante = await ComprobantePago.findById(id)
+                .populate('residente_id')
+                .populate({
+                    path: 'residente_id',
+                    populate: {
+                        path: 'user_id',
+                        select: '_id'
+                    }
+                });
+
+            if (!comprobante) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Comprobante no encontrado'
+                });
+            }
+
+            // 2. VERIFICAR PERMISOS
+            const isAdmin = req.user.role === 'administrador';
+            const isResidentePropietario = req.user.role === 'residente' && 
+                comprobante.residente_id?.user_id?._id.toString() === req.userId;
             
-            console.log('═══════════════════════════════════════════════\n');
+            if (!isAdmin && !isResidentePropietario) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'No tienes permisos para acceder a este comprobante'
+                });
+            }
+
+            // 3. VERIFICAR QUE EXISTE COMPROBANTE GENERADO
+            if (!comprobante.comprobante_final_url) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Comprobante PDF no ha sido generado aún'
+                });
+            }
+
+            // 4. CONSTRUIR RUTA DEL ARCHIVO
+            const filePath = path.join(
+                __dirname, 
+                '..', 
+                '..', 
+                comprobante.comprobante_final_url.startsWith('/') 
+                    ? comprobante.comprobante_final_url.substring(1) 
+                    : comprobante.comprobante_final_url
+            );
+
+            // 5. VERIFICAR QUE EL ARCHIVO EXISTE
+            if (!fs.existsSync(filePath)) {
+                console.error(`❌ Archivo no encontrado: ${filePath}`);
+                
+                // Intentar regenerar si es administrador
+                if (isAdmin) {
+                    return res.status(404).json({
+                        success: false,
+                        message: 'Archivo no encontrado. El comprobante necesita ser regenerado.',
+                        action_required: 'regenerate',
+                        comprobante_id: comprobante._id
+                    });
+                } else {
+                    return res.status(404).json({
+                        success: false,
+                        message: 'El comprobante no está disponible. Contacte al administrador.'
+                    });
+                }
+            }
+
+            // 6. ENVIAR ARCHIVO
+            const fileName = `comprobante-${comprobante.folio}.pdf`;
+            
+            res.setHeader('Content-Type', 'application/pdf');
+            res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+            res.setHeader('Content-Length', fs.statSync(filePath).size);
+            
+            const fileStream = fs.createReadStream(filePath);
+            fileStream.pipe(res);
+
+            console.log(`📤 Comprobante descargado: ${fileName} por usuario ${req.userId}`);
+
+        } catch (error) {
+            console.error('❌ Error descargando comprobante:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Error al descargar comprobante',
+                error: process.env.NODE_ENV === 'development' ? error.message : undefined
+            });
+        }
+    }
+);
+
+// -------------------- ENDPOINT PARA VER COMPROBANTE EN NAVEGADOR --------------------
+/**
+ * @route   GET /api/finances/comprobantes/:id/view
+ * @desc    Ver comprobante PDF en navegador
+ * @access  Private (Residente del comprobante, Administrador)
+ */
+router.get('/comprobantes/:id/view', 
+    authenticate,
+    async (req, res) => {
+        try {
+            const { id } = req.params;
+
+            // Misma lógica de permisos que el endpoint de descarga...
+            const comprobante = await ComprobantePago.findById(id)
+                .populate('residente_id')
+                .populate({
+                    path: 'residente_id',
+                    populate: {
+                        path: 'user_id',
+                        select: '_id'
+                    }
+                });
+
+            if (!comprobante) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Comprobante no encontrado'
+                });
+            }
+
+            const isAdmin = req.user.role === 'administrador';
+            const isResidentePropietario = req.user.role === 'residente' && 
+                comprobante.residente_id?.user_id?._id.toString() === req.userId;
+            
+            if (!isAdmin && !isResidentePropietario) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'No tienes permisos para ver este comprobante'
+                });
+            }
+
+            if (!comprobante.comprobante_final_url) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Comprobante PDF no ha sido generado aún'
+                });
+            }
+
+            const filePath = path.join(
+                __dirname, 
+                '..', 
+                '..', 
+                comprobante.comprobante_final_url.startsWith('/') 
+                    ? comprobante.comprobante_final_url.substring(1) 
+                    : comprobante.comprobante_final_url
+            );
+
+            if (!fs.existsSync(filePath)) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Archivo no encontrado'
+                });
+            }
+
+            // Enviar para visualización en lugar de descarga
+            res.setHeader('Content-Type', 'application/pdf');
+            res.setHeader('Content-Disposition', `inline; filename="comprobante-${comprobante.folio}.pdf"`);
+            
+            const fileStream = fs.createReadStream(filePath);
+            fileStream.pipe(res);
+
+        } catch (error) {
+            console.error('Error viendo comprobante:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Error al mostrar comprobante'
+            });
+        }
+    }
+);
+
+// -------------------- ENDPOINT PARA REGENERAR COMPROBANTE (ADMIN) --------------------
+/**
+ * @route   POST /api/finances/admin/comprobantes/:id/regenerar
+ * @desc    Regenerar comprobante PDF (para cuando se pierde o corrompe)
+ * @access  Private (Administrador)
+ */
+adminRoutes.post('/comprobantes/:id/regenerar',
+    requireRole('administrador'),
+    validateObjectId('id'),
+    async (req, res) => {
+        try {
+            const { id } = req.params;
+
+            const comprobante = await ComprobantePago.findById(id)
+                .populate('residente_id')
+                .populate('usuario_aprobador_id', 'nombre apellido');
+
+            if (!comprobante) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Comprobante no encontrado'
+                });
+            }
+
+            // Solo se puede regenerar si está aprobado
+            if (comprobante.estatus !== 'aprobado') {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Solo se pueden regenerar comprobantes aprobados'
+                });
+            }
+
+            // Obtener pagos aplicados
+            const pagosAplicados = await PagoAplicado.find({ 
+                comprobante_id: comprobante._id 
+            }).populate({
+                path: 'cargo_domicilio_id',
+                populate: {
+                    path: 'cargo_id',
+                    select: 'nombre'
+                }
+            });
+
+            if (pagosAplicados.length === 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'No hay pagos aplicados para este comprobante'
+                });
+            }
+
+            // Generar nuevo comprobante
+            const comprobantePDF = await ComprobanteGenerator.generateComprobante(
+                comprobante,
+                pagosAplicados
+            );
+
+            // Actualizar comprobante con nueva URL
+            const oldUrl = comprobante.comprobante_final_url;
+            comprobante.comprobante_final_url = comprobantePDF.url;
+            await comprobante.save();
+
+            // Eliminar archivo antiguo si existe y es diferente
+            if (oldUrl && oldUrl !== comprobantePDF.url) {
+                try {
+                    const oldPath = path.join(__dirname, '..', '..', oldUrl.startsWith('/') ? oldUrl.substring(1) : oldUrl);
+                    if (fs.existsSync(oldPath)) {
+                        fs.unlinkSync(oldPath);
+                        console.log(`🗑️ Archivo antiguo eliminado: ${oldPath}`);
+                    }
+                } catch (deleteError) {
+                    console.warn('⚠️ No se pudo eliminar archivo antiguo:', deleteError.message);
+                }
+            }
+
+            res.json({
+                success: true,
+                message: 'Comprobante regenerado exitosamente',
+                comprobante: {
+                    id: comprobante._id,
+                    folio: comprobante.folio,
+                    nuevo_comprobante_url: comprobante.comprobante_final_url,
+                    fecha_regeneracion: new Date(),
+                    detalles: {
+                        pagos_aplicados: pagosAplicados.length,
+                        monto_total: comprobante.monto_total,
+                        nombre_archivo: comprobantePDF.fileName
+                    }
+                }
+            });
+
+        } catch (error) {
+            console.error('Error regenerando comprobante:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Error al regenerar comprobante',
+                error: process.env.NODE_ENV === 'development' ? error.message : undefined
+            });
         }
     }
 );
