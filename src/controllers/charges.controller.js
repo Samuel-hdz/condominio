@@ -332,19 +332,29 @@ export const chargesController = {
                         
                         if (!cargoDomicilioResidente) continue;
 
-                        await NotificationService.notifications.pagoPendiente(
-                            residente.user_id._id,
-                            {
-                                concepto: nombre,
-                                monto: cargoDomicilioResidente.monto_final,
-                                fecha_vencimiento: fechaVencimientoDate,
-                                cargo_id: cargo[0]._id,
-                                domicilio_id: residente.domicilio_id,
-                                es_recurrente: recurrente,
-                                periodicidad: periodicidad
-                            }
-                        );
-                        
+                        await NotificationService.sendNotification({
+    userId: residente.user_id._id,
+    tipo: 'push',
+    titulo: '💰 Pago pendiente',
+    mensaje: `Tienes un pago de ${nombre} pendiente por $${cargoDomicilioResidente.monto_final}`,
+    data: {
+        tipo: 'pago',
+        action: 'pago_pendiente',
+        concepto: nombre,
+        monto: cargoDomicilioResidente.monto_final.toString(), // ✅ Ya string
+        fecha_vencimiento: fechaVencimientoDate.toISOString(), // ✅ Ya string
+        cargo_id: cargo[0]._id.toString(), // ✅ Ya string
+        domicilio_id: residente.domicilio_id._id.toString(), // ✅ Ya string
+        es_recurrente: recurrente ? 'true' : 'false', // ✅ Ya string
+        periodicidad: periodicidad || 'no_aplica' // ✅ Ya string
+    },
+    accionRequerida: true,
+    accionTipo: 'ver_cargo',
+    accionData: { 
+        cargoId: cargo[0]._id.toString() // ✅ Ya string
+    }
+});
+                                            
                         notificacionesEnviadas++;
                         
                     } catch (error) {
@@ -724,17 +734,17 @@ export const chargesController = {
             if (cd.domicilio_id.residentes && cd.domicilio_id.residentes.length > 0) {
                 for (const residente of cd.domicilio_id.residentes) {
                     await NotificationService.sendNotification({
-                        userId: residente.user_id._id,
-                        tipo: 'push',
-                        titulo: '💰 Nuevo cargo duplicado',
-                        mensaje: `Se ha duplicado el cargo "${nuevoCargo.nombre}"`,
-                        data: {
-                            tipo: 'cargo',
-                            action: 'duplicated',
-                            cargo_id: nuevoCargo._id,
-                            monto: nuevoCargo.monto_total
-                        }
-                    });
+    userId: residente.user_id._id,
+    tipo: 'push',
+    titulo: '💰 Nuevo cargo duplicado',
+    mensaje: `Se ha duplicado el cargo "${nuevoCargo.nombre}"`,
+    data: {
+        tipo: 'cargo',
+        action: 'duplicated',
+        cargo_id: nuevoCargo._id.toString(), // ✅ Convertir a string
+        monto: nuevoCargo.monto_total.toString() // ✅ Convertir a string
+    }
+});
                     residentesNotificados++;
                 }
             }
@@ -786,16 +796,23 @@ export const chargesController = {
             if (cd.domicilio_id.residentes && cd.domicilio_id.residentes.length > 0) {
                 for (const residente of cd.domicilio_id.residentes) {
                     try {
-                        await NotificationService.notifications.pagoPendiente(
-                            residente.user_id._id,
-                            {
-                                concepto: cargo.nombre,
-                                monto: cd.monto_final,
-                                fecha_vencimiento: cargo.fecha_vencimiento,
-                                cargo_id: cargo._id,
-                                saldo_pendiente: cd.saldo_pendiente
-                            }
-                        );
+                        await NotificationService.sendNotification({
+    userId: residente.user_id._id,
+    tipo: 'push',
+    titulo: '💰 Pago pendiente',
+    mensaje: `Tienes un pago de ${cargo.nombre} pendiente por $${cd.monto_final}`,
+    data: {
+        tipo: 'pago',
+        concepto: cargo.nombre,
+        monto: cd.monto_final.toString(), // ✅ Convertir a string
+        fecha_vencimiento: cargo.fecha_vencimiento.toISOString(), // ✅ Convertir a string
+        cargo_id: cargo._id.toString(), // ✅ Convertir a string
+        saldo_pendiente: cd.saldo_pendiente.toString(), // ✅ Convertir a string
+        action: 'ver_cargo' // ✅ Agregar action
+    },
+    accionRequerida: true,
+    accionTipo: 'ver_cargo'
+});
                         
                         resultados.push({
                             residente_id: residente._id,
@@ -1021,7 +1038,7 @@ export const chargesController = {
                 saldoRestante -= montoAAplicar;
                 aplicaciones.push({
                     cargo_id: cargoDom.cargo_id,
-                    monto_aplicado: montoAAplicado,
+                    monto_aplicado: montoAAplicar,
                     nuevo_saldo: cargoDom.saldo_pendiente
                 });
             }
@@ -1044,18 +1061,18 @@ export const chargesController = {
                 
                 if (residente && residente.user_id) {
                     await NotificationService.sendNotification({
-                        userId: residente.user_id._id,
-                        tipo: 'push',
-                        titulo: '💰 Saldo a favor aplicado',
-                        mensaje: `Se aplicó saldo a favor a ${aplicaciones.length} de tus cargos pendientes`,
-                        data: {
-                            tipo: 'saldo_favor',
-                            action: 'applied',
-                            aplicaciones: aplicaciones.length,
-                            total_aplicado: saldoDomicilio.saldo_favor - saldoRestante,
-                            saldo_restante: saldoRestante
-                        }
-                    });
+    userId: residente.user_id._id,
+    tipo: 'push',
+    titulo: '💰 Saldo a favor aplicado',
+    mensaje: `Se aplicó saldo a favor a ${aplicaciones.length} de tus cargos pendientes`,
+    data: {
+        tipo: 'saldo_favor',
+        action: 'applied',
+        aplicaciones: aplicaciones.length.toString(), // ✅ Convertir a string
+        total_aplicado: (saldoDomicilio.saldo_favor - saldoRestante).toString(), // ✅ Convertir a string
+        saldo_restante: saldoRestante.toString() // ✅ Convertir a string
+    }
+});
                 }
             }
 

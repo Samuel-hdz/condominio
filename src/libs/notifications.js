@@ -1,107 +1,474 @@
 import { Notificacion } from '../models/notificacion.model.js';
 import { UsuarioNotificacionPref } from '../models/usuarioNotificacionPref.model.js';
+import { DispositivoUsuario } from '../models/dispositivoUsuario.model.js';
+import { EntregaNotificacion } from '../models/entregaNotificacion.model.js';
+import admin from 'firebase-admin';
 
 /**
- * Servicio de notificaciones push/in-app
- * Nota: Esta es la implementación base. Para notificaciones push reales,
- * necesitarás integrar con Firebase Cloud Messaging (FCM) o similar.
+ * Servicio de notificaciones push/in-app con Firebase Cloud Messaging
  */
-
 class NotificationService {
+    constructor() {
+        this.fcmInitialized = false;
+        this.fcmError = null;
+        // No inicializar aquí, se hará cuando sea necesario
+    }
+
+    /**
+     * Inicializar Firebase Admin SDK (una sola vez)
+     */
+    async initFCM() {
+        try {
+            console.log('🚀 Iniciando Firebase Admin SDK...');
+            
+            if (!process.env.FIREBASE_SERVICE_ACCOUNT_KEY) {
+                this.fcmError = 'FIREBASE_SERVICE_ACCOUNT_KEY no configurado';
+                console.warn('⚠️ ' + this.fcmError);
+                return false;
+            }
+
+            // Parsear credenciales
+            let serviceAccount;
+            try {
+                serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY);
+            } catch (parseError) {
+                console.error('❌ Error parseando JSON de Firebase:', parseError.message);
+                this.fcmError = 'Error parseando JSON: ' + parseError.message;
+                return false;
+            }
+
+            // Verificar campos requeridos
+            const requiredFields = ['project_id', 'private_key', 'client_email'];
+            for (const field of requiredFields) {
+                if (!serviceAccount[field]) {
+                    this.fcmError = `Campo faltante en credenciales: ${field}`;
+                    console.error('❌ ' + this.fcmError);
+                    return false;
+                }
+            }
+
+            // Si ya está inicializado, no hacerlo de nuevo
+            if (admin.apps.length === 0) {
+                admin.initializeApp({
+                    credential: admin.credential.cert(serviceAccount)
+                });
+                console.log('✅ Firebase Admin SDK inicializado correctamente');
+                console.log(`📌 Proyecto: ${serviceAccount.project_id}`);
+            } else {
+                console.log('✅ Firebase ya estaba inicializado');
+            }
+
+            this.fcmInitialized = true;
+            return true;
+            
+        } catch (error) {
+            this.fcmError = error.message;
+            console.error('❌ Error crítico inicializando Firebase:', error);
+            return false;
+        }
+    }
+
+    /**
+     * Asegurar que Firebase está inicializado
+     */
+    async ensureFCMInitialized() {
+        if (!this.fcmInitialized) {
+            await this.initFCM();
+        }
+        return this.fcmInitialized;
+    }
+
+    /**
+     * Obtener estado de Firebase
+     */
+    getFirebaseStatus() {
+        return {
+            initialized: this.fcmInitialized,
+            error: this.fcmError,
+            timestamp: new Date(),
+            projectInfo: this.fcmInitialized ? {
+                projectId: admin.apps[0]?.options?.credential?.projectId || 'N/A',
+                clientEmail: admin.apps[0]?.options?.credential?.clientEmail || 'N/A'
+            } : null
+        };
+    }
+
+    /**
+     * Enviar mensaje de prueba
+     */
+    static async sendTestNotification(token, userId = 'test-user') {
+        const instance = new NotificationService();
+        
+        const initialized = await instance.ensureFCMInitialized();
+        if (!initialized) {
+            throw new Error(`Firebase no inicializado: ${instance.fcmError}`);
+        }
+
+        console.log("---------------------")
+        console.log(initialized)
+
+        try {
+            const testMessage = {
+                token: token,
+                notification: {
+                    title: '✅ Test de Firebase',
+                    body: 'Firebase está funcionando correctamente'
+                },
+                data: {
+                    test: 'true',
+                    timestamp: new Date().toISOString()
+                }
+            };
+            console.log(testMessage)
+
+            const response = await admin.messaging().send(testMessage);
+            console.log('📤 Test notification sent:', response);
+            
+            return {
+                success: true,
+                messageId: response,
+                timestamp: new Date()
+            };
+        } catch (error) {
+            console.error('❌ Error enviando test notification:', error);
+            throw error;
+        }
+    }
+    
+    /**
+     * Registrar dispositivo de usuario
+     */
+    static async registerDevice(userId, deviceData) {
+        const { 
+            dispositivo_id, 
+            token_fcm, 
+            plataforma, 
+            version_app, 
+            metadata = {} 
+        } = deviceData;
+
+        // Buscar dispositivo existente
+        let dispositivo = await DispositivoUsuario.findOne({ 
+            user_id: userId, 
+            dispositivo_id 
+        });
+
+        if (dispositivo) {
+            // Actualizar token si ha cambiado
+            if (dispositivo.token_fcm !== token_fcm) {
+                dispositivo.token_fcm = token_fcm;
+                dispositivo.ultima_actividad = new Date();
+                dispositivo.version_app = version_app;
+                dispositivo.metadata = metadata;
+                dispositivo.activo = true;
+                await dispositivo.save();
+                console.log(`📱 Dispositivo actualizado: ${dispositivo_id}`);
+            }
+        } else {
+            // Crear nuevo dispositivo
+            dispositivo = await DispositivoUsuario.create({
+                user_id: userId,
+                dispositivo_id,
+                token_fcm,
+                plataforma,
+                version_app,
+                metadata,
+                activo: true
+            });
+            console.log(`📱 Dispositivo registrado: ${dispositivo_id}`);
+        }
+
+        return dispositivo;
+    }
+
+    /**
+     * Desactivar dispositivo (logout, app desinstalada, etc.)
+     */
+    static async deactivateDevice(deviceId, userId) {
+        const dispositivo = await DispositivoUsuario.findOneAndUpdate(
+            { dispositivo_id: deviceId, user_id: userId },
+            { activo: false, token_fcm: null },
+            { new: true }
+        );
+        
+        return dispositivo;
+    }
+
     /**
      * Crea y envía una notificación a un usuario
-     * @param {Object} options - Opciones de la notificación
-     * @returns {Promise<Object>} Notificación creada
      */
     static async sendNotification(options) {
-    const {
-        userId,
-        tipo = 'in_app',
-        titulo,
-        mensaje,
-        data = {},
-        accionRequerida = false,
-        accionTipo = null,
-        accionData = null
-    } = options;
+        const {
+            userId,
+            tipo = 'in_app',
+            titulo,
+            mensaje,
+            data = {},
+            accionRequerida = false,
+            accionTipo = null,
+            accionData = null
+        } = options;
 
-    try {
-        // Verificar preferencias del usuario
-        let tipoFinal = tipo;
-        
-        if (tipo === 'push') {
-            const pref = await UsuarioNotificacionPref.findOne({
+        try {
+            console.log(`📨 Creando notificación para usuario ${userId}: ${titulo}`);
+
+            // ============================================
+            // 1. VERIFICAR PREFERENCIAS DEL USUARIO
+            // ============================================
+            let sendPush = tipo === 'push';
+            
+            if (sendPush) {
+                const pref = await UsuarioNotificacionPref.findOne({
+                    user_id: userId,
+                    tipo_notificacion: this.getNotificationTypeFromData(data)
+                });
+
+                // Si el usuario tiene deshabilitadas las push, cambiar a in_app
+                if (pref && pref.recibir_push === false) {
+                    sendPush = false;
+                    console.log(`⚠️ Usuario ${userId} tiene push deshabilitadas para este tipo`);
+                }
+            }
+
+            // ============================================
+            // 2. CREAR NOTIFICACIÓN EN BASE DE DATOS
+            // ============================================
+            const notification = await Notificacion.create({
                 user_id: userId,
-                tipo_notificacion: this.getNotificationTypeFromData(data)
+                tipo: tipo,
+                titulo,
+                mensaje,
+                data_json: data,
+                accion_requerida: accionRequerida,
+                accion_tipo: accionTipo,
+                accion_data: accionData,
+                enviada: tipo === 'in_app', // in_app se marca como enviada inmediatamente
+                fecha_envio: tipo === 'in_app' ? new Date() : null
             });
 
-            // Si el usuario tiene deshabilitadas las notificaciones push, cambiar a in_app
-            if (pref && pref.recibir_push === false) {
-                tipoFinal = 'in_app';
+            console.log(`📝 Notificación guardada en BD: ${notification._id}`);
+
+            // ============================================
+            // 3. ENVIAR NOTIFICACIÓN PUSH SI CORRESPONDE
+            // ============================================
+            if (sendPush) {
+                await this.processNotificationForUser(userId, notification);
             }
+
+            return notification;
+            
+        } catch (error) {
+            console.error('❌ Error enviando notificación:', error);
+            
+            // Fallback: crear notificación in_app
+            return await Notificacion.create({
+                user_id: userId,
+                tipo: 'in_app',
+                titulo,
+                mensaje,
+                data_json: data,
+                accion_requerida: accionRequerida,
+                accion_tipo: accionTipo,
+                accion_data: accionData,
+                enviada: true,
+                fecha_envio: new Date(),
+                error_envio: error.message
+            });
         }
-
-        const notification = await Notificacion.create({
-            user_id: userId,
-            tipo: tipoFinal,
-            titulo,
-            mensaje,
-            data_json: data,
-            accion_requerida: accionRequerida,
-            accion_tipo: accionTipo,
-            accion_data: accionData,
-            enviada: tipoFinal === 'in_app', // in_app se marca como enviada inmediatamente
-            fecha_envio: tipoFinal === 'in_app' ? new Date() : null
-        });
-
-        // En una implementación real, aquí enviarías la notificación push a FCM
-        if (tipoFinal === 'push') {
-            await this.sendPushNotification(notification);
-        }
-
-        return notification;
-        
-    } catch (error) {
-        console.error('Error enviando notificación:', error);
-        // En caso de error, crear notificación in_app como fallback
-        return await Notificacion.create({
-            user_id: userId,
-            tipo: 'in_app',
-            titulo,
-            mensaje,
-            data_json: data,
-            accion_requerida: accionRequerida,
-            accion_tipo: accionTipo,
-            accion_data: accionData,
-            enviada: true,
-            fecha_envio: new Date(),
-            error_en_push: error.message
-        });
     }
-}
 
     /**
-     * Envía notificación push (placeholder para implementación real)
-     * @param {Object} notification - Objeto de notificación
-     * @returns {Promise<void>}
+     * Procesar notificación para un usuario específico
      */
-    static async sendPushNotification(notification) {
-        // Implementación placeholder
-        // En producción, integrarías con FCM, Expo, OneSignal, etc.
+    static async processNotificationForUser(userId, notification) {
+        try {
+            // Buscar dispositivos activos del usuario
+            const dispositivos = await DispositivoUsuario.find({
+                user_id: userId,
+                activo: true,
+                token_fcm: { $ne: null, $ne: '' }
+            });
+
+            if (dispositivos.length === 0) {
+                console.log(`📱 Usuario ${userId} no tiene dispositivos activos`);
+                notification.error_envio = 'No hay dispositivos activos';
+                await notification.save();
+                return;
+            }
+
+            console.log(`📱 Procesando notificación para ${dispositivos.length} dispositivo(s)`);
+
+            // Crear registros de entrega
+            const entregas = [];
+            for (const dispositivo of dispositivos) {
+                const entrega = await EntregaNotificacion.create({
+                    notificacion_id: notification._id,
+                    dispositivo_id: dispositivo._id,
+                    estado: 'pendiente'
+                });
+                entregas.push(entrega);
+            }
+
+            // Enviar a cada dispositivo
+            await this.sendToDevices(notification, dispositivos, entregas);
+
+        } catch (error) {
+            console.error(`❌ Error procesando notificación para usuario ${userId}:`, error);
+            notification.error_envio = error.message;
+            await notification.save();
+        }
+    }
+
+    /**
+     * Enviar notificación a múltiples dispositivos
+     */
+    static async sendToDevices(notification, dispositivos, entregas) {
+        const instance = new NotificationService();
+        const initialized = await instance.ensureFCMInitialized();
         
-        console.log(`📱 [PUSH] Enviando notificación a usuario ${notification.user_id}: ${notification.titulo}`);
+        if (!initialized) {
+            console.error('❌ Firebase no inicializado, no se pueden enviar push');
+            await this.markAllDeliveriesAsFailed(notification._id, 'Firebase no inicializado');
+            notification.error_envio = 'Firebase no inicializado';
+            notification.enviada = false;
+            await notification.save();
+            return;
+        }
+
+        const promises = dispositivos.map((dispositivo, index) => {
+            return this.sendToSingleDevice(notification, dispositivo, entregas[index]);
+        });
+
+        // Ejecutar todas las promesas
+        const results = await Promise.allSettled(promises);
+
+        // Verificar resultados
+        const successfulDeliveries = results.filter(r => r.status === 'fulfilled').length;
         
-        // Marcar como enviada después de "enviar"
-        notification.enviada = true;
-        notification.fecha_envio = new Date();
+        if (successfulDeliveries > 0) {
+            notification.enviada = true;
+            notification.fecha_envio = new Date();
+        } else {
+            notification.enviada = false;
+            notification.error_envio = 'Falló en todos los dispositivos';
+        }
+        
         await notification.save();
     }
 
     /**
-     * Envía notificación a múltiples usuarios
-     * @param {Array} userIds - IDs de usuarios
-     * @param {Object} options - Opciones de notificación
-     * @returns {Promise<Array>} Notificaciones creadas
+     * Enviar notificación a un solo dispositivo
+     */
+    static async sendToSingleDevice(notification, dispositivo, entrega) {
+        try {
+            console.log(`📤 Enviando push a dispositivo ${dispositivo.dispositivo_id}`);
+
+            // Actualizar estado a "enviando"
+            entrega.estado = 'enviando';
+            entrega.fecha_envio = new Date();
+            await entrega.save();
+
+            // Construir mensaje FCM
+            const message = {
+                token: dispositivo.token_fcm,
+                notification: {
+                    title: notification.titulo,
+                    body: notification.mensaje
+                },
+                data: {
+                    ...notification.data_json,
+                    notification_id: notification._id.toString(),
+                    accion_tipo: notification.accion_tipo || '',
+                    accion_data: notification.accion_data ? JSON.stringify(notification.accion_data) : ''
+                },
+                android: {
+                    priority: 'high'
+                },
+                apns: {
+                    headers: {
+                        'apns-priority': '10'
+                    }
+                }
+            };
+
+            // Enviar mediante FCM
+            const response = await admin.messaging().send(message);
+            
+            // Actualizar entrega como exitosa
+            entrega.estado = 'entregada';
+            entrega.fecha_entrega = new Date();
+            entrega.metadata_fcm = { messageId: response };
+            entrega.intentos = 1;
+            await entrega.save();
+
+            console.log(`✅ Push enviado a dispositivo ${dispositivo.dispositivo_id}`);
+            return { success: true, deviceId: dispositivo.dispositivo_id };
+
+        } catch (error) {
+            console.error(`❌ Error enviando push a dispositivo ${dispositivo.dispositivo_id}:`, error.message);
+
+            // Manejar errores específicos
+            let estadoError = 'fallo';
+            let errorMessage = error.message;
+
+            if (error.code === 'messaging/registration-token-not-registered' ||
+                error.code === 'messaging/invalid-registration-token') {
+                estadoError = 'dispositivo_inactivo';
+                errorMessage = 'Token inválido o dispositivo no registrado';
+                
+                // Marcar dispositivo como inactivo
+                dispositivo.activo = false;
+                await dispositivo.save();
+            }
+
+            // Actualizar entrega con error
+            entrega.estado = estadoError;
+            entrega.ultimo_error = {
+                tipo: error.code || 'unknown',
+                mensaje: errorMessage,
+                codigo: error.code || 'unknown'
+            };
+            entrega.intentos = 1;
+            await entrega.save();
+
+            return { success: false, deviceId: dispositivo.dispositivo_id, error: errorMessage };
+        }
+    }
+
+    /**
+     * Marcar todas las entregas como fallidas
+     */
+    static async markAllDeliveriesAsFailed(notificationId, error) {
+        await EntregaNotificacion.updateMany(
+            { notificacion_id: notificationId },
+            { 
+                estado: 'fallo',
+                ultimo_error: {
+                    tipo: 'system',
+                    mensaje: error,
+                    codigo: 'firebase_not_initialized'
+                }
+            }
+        );
+    }
+
+    /**
+     * Determinar si un error es recuperable
+     */
+    static isRecoverableError(error) {
+        const recoverableCodes = [
+            'messaging/unavailable',
+            'messaging/internal-error',
+            'messaging/server-unavailable',
+            'messaging/device-message-rate-exceeded',
+            'messaging/topics-message-rate-exceeded'
+        ];
+        
+        return recoverableCodes.includes(error.code);
+    }
+
+    /**
+     * Enviar notificación a múltiples usuarios
      */
     static async sendBulkNotification(userIds, options) {
         const notifications = [];
@@ -123,9 +490,6 @@ class NotificationService {
 
     /**
      * Marca una notificación como leída
-     * @param {String} notificationId - ID de la notificación
-     * @param {String} userId - ID del usuario (para validación)
-     * @returns {Promise<Object>} Notificación actualizada
      */
     static async markAsRead(notificationId, userId) {
         const notification = await Notificacion.findOneAndUpdate(
@@ -150,9 +514,6 @@ class NotificationService {
 
     /**
      * Obtiene notificaciones no leídas de un usuario
-     * @param {String} userId - ID del usuario
-     * @param {Object} options - Opciones de paginación
-     * @returns {Promise<Object>} Notificaciones y total
      */
     static async getUnreadNotifications(userId, options = {}) {
         const { limit = 20, page = 1 } = options;
@@ -185,9 +546,6 @@ class NotificationService {
 
     /**
      * Obtiene todas las notificaciones de un usuario
-     * @param {String} userId - ID del usuario
-     * @param {Object} options - Opciones de paginación y filtrado
-     * @returns {Promise<Object>} Notificaciones y total
      */
     static async getUserNotifications(userId, options = {}) {
         const { 
@@ -223,8 +581,6 @@ class NotificationService {
 
     /**
      * Obtiene el tipo de notificación basado en los datos
-     * @param {Object} data - Datos de la notificación
-     * @returns {String} Tipo de notificación
      */
     static getNotificationTypeFromData(data) {
         if (data.tipo === 'visita') return 'visitas';
@@ -312,6 +668,24 @@ class NotificationService {
             data: { ...data, tipo: 'boletin' }
         })
     };
+
+    /**
+     * Webhook para recibir acuses de entrega de FCM
+     */
+    static async handleDeliveryReceipt(receiptData) {
+        console.log('📬 Recepción de entrega:', receiptData);
+        
+        // Actualizar notificación si fue abierta
+        if (receiptData.message_id && receiptData.event === 'MESSAGE_OPENED') {
+            await Notificacion.findByIdAndUpdate(
+                receiptData.data.notification_id,
+                { 
+                    leida: true,
+                    fecha_leida: new Date() 
+                }
+            );
+        }
+    }
 }
 
 export default NotificationService;

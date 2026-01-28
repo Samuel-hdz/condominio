@@ -227,4 +227,37 @@ router.post(
     }
 );
 
+/**
+ * @route   GET /api/system/notification-diagnostic
+ * @desc    Obtener diagnóstico del sistema de notificaciones
+ * @access  Private (Administrador)
+ */
+router.get(
+    '/notification-diagnostic',
+    requireRole('administrador'),
+    systemController.getNotificationDiagnostic
+);
+
+/**
+ * @route   POST /api/system/test-push
+ * @desc    Probar notificación push
+ * @access  Private (Administrador)
+ */
+router.post(
+    '/test-push',
+    requireRole('administrador'),
+    systemController.testPushNotification
+);
+
+/**
+ * @route   POST /api/system/notifications/test
+ * @desc    Enviar notificación de prueba (desarrollo)
+ * @access  Private (Cualquier usuario autenticado, admin puede enviar a otros)
+ */
+router.post(
+    '/notifications/test',
+    systemController.sendTestNotification
+);
+
+
 export default router;

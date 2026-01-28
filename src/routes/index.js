@@ -12,6 +12,7 @@ import systemRoutes from './system.routes.js';
 import { notFound } from '../middlewares/errorHandler.js';
 import eventsRoutes from './events.routes.js'; // 👈 NUEVO
 import gatehouseRoutes from './gatehouse.routes.js'
+import deviceRoutes from './device.routes.js'
 
 const router = Router();
 
@@ -28,6 +29,7 @@ router.use('/admin', adminRoutes);
 router.use('/committee', committeeRoutes);
 router.use('/system', systemRoutes);
 router.use('/events', eventsRoutes);
+router.use('/device', deviceRoutes)
 
 // Ruta 404 para API no encontrada
 router.use(/.*/, notFound);

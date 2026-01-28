@@ -701,27 +701,24 @@ export const financesController = {
                     console.log('📨 Enviando notificación al residente...');
                     
                     await NotificationService.sendNotification({
-                        userId: residente.user_id._id,
-                        tipo: 'push',
-                        titulo: '💰 Pago registrado por administrador',
-                        mensaje: `Se registró un pago de ${Utils.formatCurrency(montoNum)} y se generó tu comprobante ${comprobante[0].folio}`,
-                        data: {
-                            tipo: 'pago_manual',
-                            action: 'admin_registered',
-                            comprobante_id: comprobante[0]._id,
-                            comprobante_url: comprobante[0].comprobante_final_url,
-                            folio: comprobante[0].folio,
-                            monto_total: montoNum,
-                            monto_aplicado: totalAsignado,
-                            saldo_favor_generado: montoNum - totalAsignado
-                        },
-                        accionRequerida: true,
-                        accionTipo: 'descargar_comprobante',
-                        accionData: { 
-                            comprobanteId: comprobante[0]._id,
-                            pdfUrl: comprobante[0].comprobante_final_url 
-                        }
-                    });
+    userId: residente.user_id._id,
+    tipo: 'push',
+    titulo: '💰 Pago registrado',
+    mensaje: `Se registró un pago de ${Utils.formatCurrency(montoNum)} en tu cuenta`,
+    data: {
+        tipo: 'pago',
+        comprobante_id: comprobante[0]._id,
+        folio: comprobante[0].folio,
+        monto: montoNum,
+        action: 'descargar_comprobante'
+    },
+    accionRequerida: true,
+    accionTipo: 'descargar_comprobante',
+    accionData: { 
+        comprobanteId: comprobante[0]._id,
+        pdfUrl: comprobante[0].comprobante_final_url 
+    }
+});
                     
                     notificacionEnviada = true;
                     console.log('✅ Notificación enviada');

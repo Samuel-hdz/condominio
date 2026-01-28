@@ -7,13 +7,19 @@
     "dev": "nodemon src/index.js",
     "setup-uploads": "node scripts/createUploadsFolders.js",
     "seed": "node src/scripts/seed.js",
-    "jobs:test": "node -e \"import('./src/jobs/financeJobs.js').then(m => m.default.generateRecurringCharges())\""
+    "jobs:test": "node -e \"import('./src/jobs/financeJobs.js').then(m => m.default.generateRecurringCharges())\"",
+    "firebase:convert": "node scripts/setup-firebase.js convert",
+    "firebase:test": "node scripts/setup-firebase.js test",
+    "firebase:setup": "node scripts/setup-firebase.js",
+    "test:setup": "node scripts/setup-test-data.js",
+    "test:setup-clean": "node scripts/setup-test-data.js --clean"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "description": "",
   "devDependencies": {
+    "node-fetch": "^3.3.2",
     "nodemon": "^3.1.11"
   },
   "dependencies": {
@@ -30,6 +36,7 @@
     "firebase-admin": "^13.6.0",
     "fs": "^0.0.1-security",
     "jimp": "^1.6.0",
+    "joi": "^18.0.2",
     "jsonwebtoken": "^9.0.3",
     "jsqr": "^1.4.0",
     "moment": "^2.30.1",

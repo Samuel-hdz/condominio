@@ -41,15 +41,23 @@ export const packagesController = {
         });
 
         // Enviar notificación al residente
-        await NotificationService.notifications.paqueteRecibido(
-            residente.user_id._id,
-            {
-                empresa: empresa_paqueteria,
-                descripcion,
-                fecha: Utils.formatDate(new Date(), true),
-                paqueteId: paquete._id
-            }
-        );
+        await NotificationService.sendNotification({
+    userId: residente.user_id._id,
+    tipo: 'push',
+    titulo: '📦 Paquete recibido',
+    mensaje: `Tienes un paquete de ${empresa_paqueteria} en caseta`,
+    data: {
+        tipo: 'paquete',
+        empresa: empresa_paqueteria,
+        descripcion,
+        fecha: Utils.formatDate(new Date(), true),
+        paqueteId: paquete._id,
+        action: 'ver_paquete'
+    },
+    accionRequerida: true,
+    accionTipo: 'ver_paquete',
+    accionData: { paqueteId: paquete._id }
+});
 
         // Marcar como notificado
         paquete.estado = 'notificado';

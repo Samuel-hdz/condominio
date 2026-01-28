@@ -1,5 +1,4 @@
 import { catchAsync } from '../middlewares/errorHandler.js';
-import NotificationService from '../libs/notifications.js';
 import { UsuarioNotificacionPref } from '../models/usuarioNotificacionPref.model.js';
 import { CuentaBancaria } from '../models/cuentaBancaria.model.js';
 import { BitacoraIncidencia } from '../models/bitacoraIncidencia.model.js';
@@ -17,6 +16,9 @@ export const systemController = {
             tipo 
         } = req.query;
 
+        // Importar NotificationService
+        const NotificationService = (await import('../libs/notifications.js')).default;
+        
         const result = await NotificationService.getUserNotifications(
             userId,
             { page: parseInt(page), limit: parseInt(limit), leida, tipo }
@@ -34,6 +36,9 @@ export const systemController = {
     markNotificationAsRead: catchAsync(async (req, res) => {
         const { id } = req.params;
 
+        // Importar NotificationService
+        const NotificationService = (await import('../libs/notifications.js')).default;
+        
         const notification = await NotificationService.markAsRead(id, req.userId);
 
         res.json({
@@ -297,6 +302,9 @@ export const systemController = {
                 estatus: 'activo'
             }).populate('user_id');
 
+            // Importar NotificationService
+            const NotificationService = (await import('../libs/notifications.js')).default;
+            
             for (const residente of residentes) {
                 await NotificationService.sendNotification({
                     userId: residente.user_id._id,
@@ -423,6 +431,9 @@ export const systemController = {
                 estatus: 'activo'
             }).populate('user_id');
 
+            // Importar NotificationService
+            const NotificationService = (await import('../libs/notifications.js')).default;
+            
             for (const residente of residentes) {
                 await NotificationService.sendNotification({
                     userId: residente.user_id._id,
@@ -702,5 +713,176 @@ export const systemController = {
             success: true,
             config
         });
-    })
+    }),
+
+    /**
+     * Obtener diagnóstico del sistema de notificaciones
+     */
+    getNotificationDiagnostic: catchAsync(async (req, res) => {
+        const NotificationService = (await import('../libs/notifications.js')).default;
+        
+        // Crear una instancia de NotificationService
+        const notificationServiceInstance = new NotificationService();
+        
+        // Inicializar Firebase y obtener estado
+        await notificationServiceInstance.ensureFCMInitialized();
+        const firebaseStatus = notificationServiceInstance.getFirebaseStatus();
+        
+        // Contar dispositivos registrados
+        const { DispositivoUsuario } = await import('../models/dispositivoUsuario.model.js');
+        const totalDevices = await DispositivoUsuario.countDocuments();
+        const activeDevices = await DispositivoUsuario.countDocuments({ activo: true });
+        
+        // Contar notificaciones
+        const { Notificacion } = await import('../models/notificacion.model.js');
+        const totalNotifications = await Notificacion.countDocuments();
+        const recentNotifications = await Notificacion.countDocuments({
+            created_at: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } // últimas 24h
+        });
+
+        // Contar entregas
+        const { EntregaNotificacion } = await import('../models/entregaNotificacion.model.js');
+        const entregasStats = await EntregaNotificacion.aggregate([
+            { $group: { _id: '$estado', count: { $sum: 1 } } }
+        ]);
+
+        res.json({
+            success: true,
+            diagnostic: {
+                firebase: firebaseStatus,
+                devices: {
+                    total: totalDevices,
+                    active: activeDevices,
+                    inactive: totalDevices - activeDevices
+                },
+                notifications: {
+                    total: totalNotifications,
+                    last_24h: recentNotifications,
+                    by_type: await Notificacion.aggregate([
+                        { $group: { _id: '$tipo', count: { $sum: 1 } } }
+                    ])
+                },
+                deliveries: entregasStats,
+                system: {
+                    node_version: process.version,
+                    environment: process.env.NODE_ENV,
+                    timestamp: new Date()
+                }
+            }
+        });
+    }),
+
+    /**
+     * Probar notificación push
+     */
+    testPushNotification: catchAsync(async (req, res) => {
+        const { token } = req.body;
+        const userId = req.userId;
+        
+        if (!token) {
+            return res.status(400).json({
+                success: false,
+                message: 'Se requiere token FCM para la prueba'
+            });
+        }
+
+        try {
+            // Importar NotificationService
+            const NotificationService = (await import('../libs/notifications.js')).default;
+            
+            // Enviar test notification (método estático)
+            const result = await NotificationService.sendTestNotification(token, userId);
+            
+            // Obtener estado de Firebase para la respuesta
+            const instance = new NotificationService();
+            await instance.ensureFCMInitialized();
+            const firebaseStatus = instance.getFirebaseStatus();
+            
+            res.json({
+                success: true,
+                message: 'Notificación de prueba enviada',
+                result,
+                firebase_status: firebaseStatus
+            });
+            
+        } catch (error) {
+            // Crear instancia para obtener estado de Firebase incluso en error
+            const NotificationService = (await import('../libs/notifications.js')).default;
+            const instance = new NotificationService();
+            await instance.ensureFCMInitialized();
+            const firebaseStatus = instance.getFirebaseStatus();
+            
+            res.status(500).json({
+                success: false,
+                message: 'Error enviando notificación de prueba',
+                error: error.message,
+                firebase_status: firebaseStatus
+            });
+        }
+    }),
+
+    /**
+     * Enviar notificación de prueba (para desarrollo)
+     */
+    sendTestNotification: catchAsync(async (req, res) => {
+        const { 
+            user_id, 
+            tipo = 'push', 
+            titulo, 
+            mensaje, 
+            data = {},
+            accionRequerida = false,
+            accionTipo = null,
+            accionData = null
+        } = req.body;
+
+        // Verificar permisos (solo admin puede enviar a otros usuarios)
+        const isAdmin = req.userRoles.includes('administrador');
+        
+        let targetUserId = user_id;
+        
+        // Si no es admin, solo puede enviarse a sí mismo
+        if (!isAdmin && user_id !== req.userId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Solo administradores pueden enviar notificaciones a otros usuarios'
+            });
+        }
+        
+        // Si no se especifica user_id y es admin, usar su propio ID
+        if (!targetUserId) {
+            targetUserId = req.userId;
+        }
+
+        // Importar NotificationService
+        const NotificationService = (await import('../libs/notifications.js')).default;
+        
+        // Enviar notificación
+        const notification = await NotificationService.sendNotification({
+            userId: targetUserId,
+            tipo,
+            titulo,
+            mensaje,
+            data,
+            accionRequerida,
+            accionTipo,
+            accionData
+        });
+
+        res.json({
+            success: true,
+            message: 'Notificación de prueba enviada',
+            notification: {
+                id: notification._id,
+                tipo: notification.tipo,
+                titulo: notification.titulo,
+                mensaje: notification.mensaje,
+                enviada: notification.enviada,
+                fecha_envio: notification.fecha_envio,
+                error_envio: notification.error_envio,
+                accion_requerida: notification.accion_requerida,
+                accion_tipo: notification.accion_tipo
+            }
+        });
+    }),
 };

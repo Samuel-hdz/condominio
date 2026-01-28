@@ -563,14 +563,14 @@ export const adminController = {
 
         // Enviar notificaciones
         const resultados = await NotificationService.sendBulkNotification(
-            destinatarios,
-            {
-                tipo: 'push',
-                titulo,
-                mensaje,
-                data: { tipo: 'system', action: 'bulk_notification' }
-            }
-        );
+        destinatarios,
+        {
+            tipo: 'push',
+            titulo,
+            mensaje,
+            data: { tipo: 'system', action: 'bulk_notification' }
+        }
+    );
 
         res.json({
             success: true,

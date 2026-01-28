@@ -644,17 +644,23 @@ if (accesoPermitido && tipoNombre === 'personal' && autorizacion.personal_id) {
                                    autorizacion.personal_id?.nombre ||
                                    'Invitado';
             
-            await NotificationService.notifications.visitaIngreso(
-                residente.user_id._id,
-                {
-                    nombreVisitante,
-                    tipoVisita: tipoNombre,
-                    hora: Utils.formatDate(ahora, true),
-                    permitido: accesoPermitido,
-                    visitaId: autorizacion._id,
-                    motivoDenegacion
-                }
-            );
+            await NotificationService.sendNotification({
+    userId: residente.user_id._id,
+    tipo: 'push',
+    titulo: '🚪 Visitante en acceso',
+    mensaje: `${nombreVisitante} está intentando ingresar`,
+    data: {
+        tipo: 'visita',
+        nombreVisitante,
+        tipoVisita: tipoNombre,
+        hora: Utils.formatDate(ahora, true),
+        permitido: accesoPermitido,
+        visitaId: autorizacion._id,
+        motivoDenegacion,
+        action: 'ver_visita'
+    },
+    accionRequerida: false
+});
         }
 
         // Respuesta

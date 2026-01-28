@@ -6,6 +6,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import routes from './src/routes/index.js';
 import { errorHandler } from './src/middlewares/errorHandler.js';
+import initializeFirebase from './init-firebase.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -27,6 +28,10 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // API Routes
 app.use('/api', routes);
+
+initializeFirebase().catch(err => {
+    console.error('Error inicializando Firebase:', err);
+});
 
 // Middleware de manejo de errores
 

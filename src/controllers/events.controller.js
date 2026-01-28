@@ -214,17 +214,23 @@ export const eventsController = {
         .populate('user_id');
 
     if (residente && residente.user_id) {
-        await NotificationService.notifications.visitaIngreso(
-            residente.user_id._id,
-            {
-                nombreVisitante: nombre_invitado || 'Invitado',
-                tipoVisita: 'evento',
-                hora: Utils.formatDate(ahora, true),
-                permitido: true,
-                eventoId: evento._id,
-                eventoNombre: evento.nombre_evento
-            }
-        );
+        await NotificationService.sendNotification({
+    userId: residente.user_id._id,
+    tipo: 'push',
+    titulo: '🚪 Visitante en acceso',
+    mensaje: `${nombre_invitado || 'Invitado'} está ingresando al evento`,
+    data: {
+        tipo: 'visita',
+        nombreVisitante: nombre_invitado || 'Invitado',
+        tipoVisita: 'evento',
+        hora: Utils.formatDate(ahora, true),
+        permitido: true,
+        eventoId: evento._id,
+        eventoNombre: evento.nombre_evento,
+        action: 'ver_visita'
+    },
+    accionRequerida: false
+});
     }
 
     res.json({

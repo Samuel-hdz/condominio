@@ -68,14 +68,22 @@ export const communicationsController = {
             .populate('user_id');
         
         for (const casetaUserId of usuariosCaseta) {
-            await NotificationService.notifications.nuevoMensaje(
-                casetaUserId,
-                {
-                    remitente: `${residente.user_id.nombre} ${residente.user_id.apellido}`,
-                    mensajePreview: mensaje.length > 50 ? mensaje.substring(0, 50) + '...' : mensaje,
-                    conversacionId: conversacion._id
-                }
-            );
+            await NotificationService.sendNotification({
+    userId: casetaUserId,
+    tipo: 'push',
+    titulo: '💬 Nuevo mensaje',
+    mensaje: `${residente.user_id.nombre} ${residente.user_id.apellido}: ${mensaje.length > 50 ? mensaje.substring(0, 50) + '...' : mensaje}`,
+    data: {
+        tipo: 'chat',
+        remitente: `${residente.user_id.nombre} ${residente.user_id.apellido}`,
+        mensajePreview: mensaje.length > 50 ? mensaje.substring(0, 50) + '...' : mensaje,
+        conversacionId: conversacion._id,
+        action: 'responder_chat'
+    },
+    accionRequerida: true,
+    accionTipo: 'responder_chat',
+    accionData: { conversacionId: conversacion._id }
+});
         }
 
         res.status(201).json({
@@ -476,17 +484,22 @@ export const communicationsController = {
 
         // Enviar notificaciones
         for (const residenteUserId of residentesIds) {
-            await NotificationService.notifications.nuevoBoletin(
-                residenteUserId,
-                {
-                    titulo: publicacion.titulo,
-                    contenidoPreview: publicacion.contenido.length > 100 
-                        ? publicacion.contenido.substring(0, 100) + '...' 
-                        : publicacion.contenido,
-                    publicacionId: publicacion._id,
-                    tipo: publicacion.tipo
-                }
-            );
+            await NotificationService.sendNotification({
+    userId: residenteUserId,
+    tipo: 'push',
+    titulo: '📢 Nuevo boletín',
+    mensaje: publicacion.titulo,
+    data: {
+        tipo: 'boletin',
+        titulo: publicacion.titulo,
+        contenidoPreview: publicacion.contenido.length > 100 
+            ? publicacion.contenido.substring(0, 100) + '...' 
+            : publicacion.contenido,
+        publicacionId: publicacion._id,
+        tipo_publicacion: publicacion.tipo,
+        action: 'ver_boletin'
+    }
+});
         }
 
         // Marcar como notificada
