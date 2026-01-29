@@ -95,7 +95,7 @@ export const committeeController = {
                 tipo: 'committee', 
                 action: 'assigned',
                 cargo: cargo_personalizado || cargo.nombre,
-                miembro_id: miembro._id
+                miembro_id: miembro._id.toString()
             }
         });
 
@@ -112,7 +112,7 @@ export const committeeController = {
                 data: { 
                     tipo: 'committee', 
                     action: 'member_added',
-                    miembro_id: miembro._id
+                    miembro_id: miembro._id.toString()
                 }
             });
         }
@@ -197,7 +197,7 @@ export const committeeController = {
                     tipo: 'committee', 
                     action: 'updated',
                     cargo: cargo_personalizado || cargoInfo?.nombre,
-                    estatus: miembro.estatus
+                    estatus: miembro.estatus || 'Sin especificar'
                 }
             });
         }

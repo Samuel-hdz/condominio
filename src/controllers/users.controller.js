@@ -257,7 +257,7 @@ export const usersController = {
                 tipo: 'in_app',
                 titulo: '⚠️ Cuenta actualizada',
                 mensaje: `Tu cuenta ha sido ${estatus === 'inactivo' ? 'desactivada' : 'suspendida'}.`,
-                data: { tipo: 'system', action: 'account_updated' }
+                data: { tipo: 'system', action: 'account_updated' } 
             });
         }
 
@@ -317,7 +317,7 @@ export const usersController = {
             data: { 
                 tipo: 'system', 
                 action: 'roles_updated',
-                roles: roles 
+                roles: JSON.stringify(roles) 
             }
         });
 

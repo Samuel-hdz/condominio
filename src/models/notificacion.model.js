@@ -49,17 +49,17 @@ const notificacionSchema = new mongoose.Schema({
     accion_tipo: {
         type: String,
         enum: [
-            'ver_comprobante',      // ← Ya existe
-            'descargar_comprobante', // ← AGREGAR ESTE
-            'ver_estado_cuenta',    // ← Ya existe
-            'responder_mensaje',    // ← Ya existe
-            'ver_cargo',           // ← Agregar si no existe
-            'pagar_cargo',         // ← Agregar si no existe
-            'ver_visita',          // ← Agregar si no existe
-            'ver_evento',          // ← Agregar si no existe
-            'ver_paquete',         // ← Agregar si no existe
-            'ver_bitacora',        // ← Agregar si no existe
-            null                   // ← Para notificaciones sin acción
+            'ver_comprobante',
+            'descargar_comprobante', 
+            'ver_estado_cuenta', 
+            'responder_mensaje',    
+            'ver_cargo',          
+            'pagar_cargo',         
+            'ver_visita',         
+            'ver_evento',          
+            'ver_paquete',         
+            'ver_bitacora',        
+            null                   
         ]
     },
     accion_data: {

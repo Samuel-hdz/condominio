@@ -91,7 +91,7 @@ export const requireRole = (...allowedRoles) => {
 
             next();
         } catch (error) {
-            next(error); // 👈 MUY IMPORTANTE
+            next(error);
         }
     };
 };

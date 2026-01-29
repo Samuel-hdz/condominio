@@ -17,10 +17,10 @@ folders.forEach(folder => {
     
     if (!fs.existsSync(folderPath)) {
         fs.mkdirSync(folderPath, { recursive: true });
-        console.log(`✅ Carpeta creada: ${folder}`);
+        console.log(`Carpeta creada: ${folder}`);
     } else {
-        console.log(`📁 Carpeta ya existe: ${folder}`);
+        console.log(`Carpeta ya existe: ${folder}`);
     }
 });
 
-console.log('✅ Estructura de carpetas para uploads creada exitosamente');
+console.log('Estructura de carpetas para uploads creada exitosamente');

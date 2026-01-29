@@ -121,12 +121,10 @@ router.put(
     residentsController.updateMorosidad
 );
 
-// ========== RUTAS PARA APP MÓVIL ==========
-
 // Middleware específico para app móvil
 const mobileRoutes = Router();
-mobileRoutes.use(blockSuspendedResidents);      // 👈 BLOQUEA SUSPENDIDOS
-mobileRoutes.use(requireResidentMobileAccess);   // 👈 VERIFICA QUE SEA RESIDENTE
+mobileRoutes.use(blockSuspendedResidents);
+mobileRoutes.use(requireResidentMobileAccess);
 
 /**
  * @route   PUT /api/residents/mobile/reception-status
@@ -187,9 +185,7 @@ principalResidentRoutes.put(
     residentsController.toggleSecondaryResident
 );
 
-// ========== COMBINAR TODAS LAS RUTAS ==========
 
-// NOTA: NO poner authenticate aquí porque ya está en router.use(authenticate) arriba
 router.use('/mobile', mobileRoutes);
 router.use('/principal', principalResidentRoutes);
 

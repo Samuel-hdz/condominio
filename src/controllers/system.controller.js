@@ -314,8 +314,8 @@ export const systemController = {
                     data: { 
                         tipo: 'incidence', 
                         action: 'registered',
-                        incidencia_id: incidencia._id,
-                        tipo_incidencia 
+                        incidencia_id: incidencia._id.toString(), 
+                        tipo_incidencia: tipo_incidencia || 'general'
                     }
                 });
             }
@@ -443,8 +443,8 @@ export const systemController = {
                     data: { 
                         tipo: 'incidence', 
                         action: 'updated',
-                        incidencia_id: incidencia._id,
-                        seguimiento_completado 
+                        incidencia_id: incidencia._id.toString(),
+                        seguimiento_completado: seguimiento_completado.toString() 
                     }
                 });
             }

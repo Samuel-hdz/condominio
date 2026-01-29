@@ -2,9 +2,7 @@ import cron from 'node-cron';
 import { Cargo } from '../models/cargo.model.js';
 import { CargoDomicilio } from '../models/cargoDomicilio.model.js';
 import { Domicilio } from '../models/domicilio.model.js';
-import { TipoCargo } from '../models/tipoCargo.model.js';
 import NotificationService from '../libs/notifications.js';
-import Utils from '../libs/utils.js';
 import mongoose from 'mongoose';
 
 /**
@@ -327,8 +325,8 @@ class RecurrentChargesJob {
                 data: {
                     tipo: 'cargo',
                     action: 'recurrent_generated',
-                    cargo_id: nuevoCargo._id,
-                    total_domicilios: totalDomicilios
+                    cargo_id: nuevoCargo._id.toString(), 
+                    total_domicilios: totalDomicilios.toString() 
                 }
             });
         }
@@ -349,10 +347,10 @@ class RecurrentChargesJob {
                 data: {
                     tipo: 'cargo',
                     action: 'recurrent_failed',
-                    fallos: fallos.map(f => ({
-                        nombre: f.nombre,
-                        error: f.error
-                    }))
+                    fallos: JSON.stringify(fallos.map(f => ({
+                        nombre: f.nombre || 'N/A',
+                        error: f.error || 'Error desconocido'
+                    })))
                 },
                 accionRequerida: true,
                 accionTipo: 'ver_reportes'

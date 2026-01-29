@@ -10,7 +10,7 @@ import adminRoutes from './admin.routes.js';
 import committeeRoutes from './committee.routes.js';
 import systemRoutes from './system.routes.js';
 import { notFound } from '../middlewares/errorHandler.js';
-import eventsRoutes from './events.routes.js'; // 👈 NUEVO
+import eventsRoutes from './events.routes.js';
 import gatehouseRoutes from './gatehouse.routes.js'
 import deviceRoutes from './device.routes.js'
 

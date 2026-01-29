@@ -360,50 +360,67 @@ class NotificationService {
      * Enviar notificación a un solo dispositivo
      */
     static async sendToSingleDevice(notification, dispositivo, entrega) {
-        try {
-            console.log(`📤 Enviando push a dispositivo ${dispositivo.dispositivo_id}`);
+    try {
+        console.log(`📤 Enviando push a dispositivo ${dispositivo.dispositivo_id}`);
 
-            // Actualizar estado a "enviando"
-            entrega.estado = 'enviando';
-            entrega.fecha_envio = new Date();
-            await entrega.save();
+        // Actualizar estado a "enviando"
+        entrega.estado = 'enviando';
+        entrega.fecha_envio = new Date();
+        await entrega.save();
 
-            // Construir mensaje FCM
-            const message = {
-                token: dispositivo.token_fcm,
-                notification: {
-                    title: notification.titulo,
-                    body: notification.mensaje
-                },
-                data: {
-                    ...notification.data_json,
-                    notification_id: notification._id.toString(),
-                    accion_tipo: notification.accion_tipo || '',
-                    accion_data: notification.accion_data ? JSON.stringify(notification.accion_data) : ''
-                },
-                android: {
-                    priority: 'high'
-                },
-                apns: {
-                    headers: {
-                        'apns-priority': '10'
-                    }
+        // ============================================
+        // CONVERTIR TODOS LOS VALORES A STRING
+        // ============================================
+        const safeData = {};
+        for (const [key, value] of Object.entries(notification.data_json || {})) {
+            if (value === null || value === undefined) {
+                safeData[key] = '';
+            } else if (typeof value === 'object') {
+                // Convertir objetos/arrays a JSON string
+                safeData[key] = JSON.stringify(value);
+            } else {
+                // Convertir cualquier otro tipo a string
+                safeData[key] = String(value);
+            }
+        }
+
+        // Añadir metadatos de la notificación
+        safeData.notification_id = notification._id.toString();
+        safeData.accion_tipo = notification.accion_tipo || '';
+        safeData.accion_data = notification.accion_data ? 
+            JSON.stringify(notification.accion_data) : '';
+
+        // Construir mensaje FCM
+        const message = {
+            token: dispositivo.token_fcm,
+            notification: {
+                title: notification.titulo,
+                body: notification.mensaje
+            },
+            data: safeData,  // ✅ Ahora todos son strings
+            android: {
+                priority: 'high'
+            },
+            apns: {
+                headers: {
+                    'apns-priority': '10'
                 }
-            };
+            }
+        };
 
-            // Enviar mediante FCM
-            const response = await admin.messaging().send(message);
-            
-            // Actualizar entrega como exitosa
-            entrega.estado = 'entregada';
-            entrega.fecha_entrega = new Date();
-            entrega.metadata_fcm = { messageId: response };
-            entrega.intentos = 1;
-            await entrega.save();
+        // Enviar mediante FCM
+        const response = await admin.messaging().send(message);
+        
+        // Actualizar entrega como exitosa
+        entrega.estado = 'entregada';
+        entrega.fecha_entrega = new Date();
+        entrega.metadata_fcm = { messageId: response };
+        entrega.intentos = 1;
+        await entrega.save();
 
-            console.log(`✅ Push enviado a dispositivo ${dispositivo.dispositivo_id}`);
-            return { success: true, deviceId: dispositivo.dispositivo_id };
-
+        console.log(`✅ Push enviado a dispositivo ${dispositivo.dispositivo_id}`);
+        return { success: true, deviceId: dispositivo.dispositivo_id };
+        
         } catch (error) {
             console.error(`❌ Error enviando push a dispositivo ${dispositivo.dispositivo_id}:`, error.message);
 

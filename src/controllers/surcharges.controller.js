@@ -326,11 +326,11 @@ export const surchargesController = {
                 data: {
                     tipo: 'recargo',
                     action: 'applied',
-                    cargo_id: cargoDomicilio.cargo_id,
-                    recargo_id: recargo._id,
-                    monto_recargo: montoRecargo,
+                    cargo_id: cargoDomicilio.cargo_id.toString(), 
+                    recargo_id: recargo._id.toString(), 
+                    monto_recargo: montoRecargo.toString(),  
                     recargo_nombre: recargo.nombre,
-                    nuevo_saldo: cargoDomicilio.saldo_pendiente + montoRecargo
+                    nuevo_saldo: (cargoDomicilio.saldo_pendiente + montoRecargo).toString() 
                 },
                 accionRequerida: true,
                 accionTipo: 'ver_estado_cuenta'

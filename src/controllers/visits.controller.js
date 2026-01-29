@@ -178,7 +178,7 @@ export const visitsController = {
             data: { 
                 tipo: 'visita', 
                 action: 'authorization_created',
-                autorizacion_id: autorizacion._id,
+                autorizacion_id: autorizacion._id.toString(),
                 tipo_visita: tipoVisita.nombre
             }
         });
@@ -431,8 +431,8 @@ export const visitsController = {
             data: { 
                 tipo: 'visita', 
                 action: 'authorization_cancelled',
-                autorizacion_id: autorizacion._id,
-                nombre_visitante: autorizacion.nombre_visitante 
+                autorizacion_id: autorizacion._id.toString(), 
+                nombre_visitante: autorizacion.nombre_visitante
             }
         });
 
@@ -645,22 +645,22 @@ if (accesoPermitido && tipoNombre === 'personal' && autorizacion.personal_id) {
                                    'Invitado';
             
             await NotificationService.sendNotification({
-    userId: residente.user_id._id,
-    tipo: 'push',
-    titulo: '🚪 Visitante en acceso',
-    mensaje: `${nombreVisitante} está intentando ingresar`,
-    data: {
-        tipo: 'visita',
-        nombreVisitante,
-        tipoVisita: tipoNombre,
-        hora: Utils.formatDate(ahora, true),
-        permitido: accesoPermitido,
-        visitaId: autorizacion._id,
-        motivoDenegacion,
-        action: 'ver_visita'
-    },
-    accionRequerida: false
-});
+                userId: residente.user_id._id,
+                tipo: 'push',
+                titulo: '🚪 Visitante en acceso',
+                mensaje: `${nombreVisitante} está intentando ingresar`,
+                data: {
+                    tipo: 'visita',
+                    nombreVisitante: nombreVisitante || 'Visitante',
+                    tipoVisita: tipoNombre || 'Visita',
+                    hora: Utils.formatDate(ahora, true),
+                    permitido: accesoPermitido.toString(),
+                    visitaId: autorizacion._id.toString(),
+                    motivoDenegacion: motivoDenegacion || '',
+                    action: 'ver_visita'
+                },
+                accionRequerida: false
+            });
         }
 
         // Respuesta

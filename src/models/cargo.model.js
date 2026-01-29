@@ -1,4 +1,3 @@
-// models/cargo.model.js - VERSIÓN ACTUALIZADA
 import mongoose from 'mongoose';
 
 const cargoSchema = new mongoose.Schema({
@@ -36,7 +35,6 @@ const cargoSchema = new mongoose.Schema({
         required: true
     },
     
-    // ✅ AHORA CONFIGURADO POR ADMIN EN createCharge
     periodicidad: {
         type: String,
         enum: ['semanal', 'quincenal', 'mensual', 'bimestral', 'trimestral', 'semestral', 'anual', null],
@@ -62,7 +60,6 @@ const cargoSchema = new mongoose.Schema({
         required: true
     },
     
-    // ✅ NUEVO: Guardar configuración del admin para auditoría
     configuracion_admin: {
         decidio_recurrente: {
             type: Boolean,
@@ -83,7 +80,6 @@ const cargoSchema = new mongoose.Schema({
         }
     },
     
-    // Metadata adicional
     metadata: {
         version: {
             type: Number,

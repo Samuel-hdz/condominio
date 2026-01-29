@@ -331,11 +331,11 @@ class SurchargesJob {
                 data: {
                     tipo: 'recargo',
                     action: 'applied',
-                    cargo_id: cargoDomicilio.cargo_id,
-                    recargo_id: recargo._id,
-                    monto_recargo: montoRecargo,
-                    recargo_nombre: recargo.nombre,
-                    nuevo_saldo: cargoDomicilio.saldo_pendiente + montoRecargo
+                    cargo_id: cargoDomicilio.cargo_id.toString(),  
+                    recargo_id: recargo._id.toString(), 
+                    monto_recargo: montoRecargo.toString(),  
+                    recargo_nombre: recargo.nombre || '',
+                    nuevo_saldo: (cargoDomicilio.saldo_pendiente + montoRecargo).toString()
                 },
                 accionRequerida: true,
                 accionTipo: 'ver_estado_cuenta'
@@ -365,10 +365,10 @@ class SurchargesJob {
                     data: {
                         tipo: 'reporte',
                         action: 'surcharges_applied',
-                        exitosos: exitosos.length,
-                        fallidos: fallidos.length,
-                        total_monto: exitosos.reduce((sum, r) => sum + (r.total_monto_recargado || 0), 0),
-                        fecha: new Date().toISOString().split('T')[0]
+                        exitosos: exitosos.length.toString(),
+                        fallidos: fallidos.length.toString(), 
+                        total_monto: exitosos.reduce((sum, r) => sum + (r.total_monto_recargado || 0), 0).toString(), 
+                        fecha: new Date().toISOString().split('T')[0] 
                     }
                 });
             } catch (error) {

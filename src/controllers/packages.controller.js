@@ -42,22 +42,22 @@ export const packagesController = {
 
         // Enviar notificación al residente
         await NotificationService.sendNotification({
-    userId: residente.user_id._id,
-    tipo: 'push',
-    titulo: '📦 Paquete recibido',
-    mensaje: `Tienes un paquete de ${empresa_paqueteria} en caseta`,
-    data: {
-        tipo: 'paquete',
-        empresa: empresa_paqueteria,
-        descripcion,
-        fecha: Utils.formatDate(new Date(), true),
-        paqueteId: paquete._id,
-        action: 'ver_paquete'
-    },
-    accionRequerida: true,
-    accionTipo: 'ver_paquete',
-    accionData: { paqueteId: paquete._id }
-});
+            userId: residente.user_id._id,
+            tipo: 'push',
+            titulo: '📦 Paquete recibido',
+            mensaje: `Tienes un paquete de ${empresa_paqueteria} en caseta`,
+            data: {
+                tipo: 'paquete',
+                empresa: empresa_paqueteria,
+                descripcion: descripcion || '',
+                fecha: Utils.formatDate(new Date(), true),
+                paqueteId: paquete._id.toString(),  // ✅ Convertir a string
+                action: 'ver_paquete'
+            },
+            accionRequerida: true,
+            accionTipo: 'ver_paquete',
+            accionData: { paqueteId: paquete._id.toString() }  // ✅ Convertir a string
+        });
 
         // Marcar como notificado
         paquete.estado = 'notificado';

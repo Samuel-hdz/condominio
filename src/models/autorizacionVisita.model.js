@@ -104,7 +104,7 @@ autorizacionVisitaSchema.index({ estado: 1 });
 autorizacionVisitaSchema.index({ fecha_fin_vigencia: 1 });
 autorizacionVisitaSchema.index({ evento_id: 1 });
 autorizacionVisitaSchema.index({ proveedor_id: 1 });
-autorizacionVisitaSchema.index({ personal_id: 1 }); // 👈 NUEVO ÍNDICE
+autorizacionVisitaSchema.index({ personal_id: 1 });
 autorizacionVisitaSchema.index({ 
     residente_id: 1, 
     estado: 1, 

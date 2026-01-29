@@ -15,22 +15,11 @@ import {
     validateCreateCharge,
     validateCreateSurcharge
 } from '../middlewares/index.js';
-import Utils from '../libs/utils.js';
-
 import { SaldoDomicilio } from '../models/saldoDomicilio.model.js';
-import { AuditoriaGeneral } from '../models/auditoriaGeneral.model.js';
 import multer from 'multer';
 import path from 'path';
 import { Residente } from '../models/residente.model.js';
-import mongoose from 'mongoose';
-import { ComprobantePago } from '../models/comprobantePago.model.js';
 import { validateManualPayment } from '../middlewares/financeValidation.js';
-import { CargoDomicilio } from '../models/cargoDomicilio.model.js';
-import { PagoAplicado } from '../models/pagoAplicado.model.js';
-import NotificationService from '../libs/notifications.js';
-
-import ComprobanteGenerator from '../libs/comprobanteGenerator.js';
-import fs from 'fs';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);

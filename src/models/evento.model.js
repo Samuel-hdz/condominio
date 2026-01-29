@@ -40,12 +40,10 @@ const eventoSchema = new mongoose.Schema({
         unique: true,
         sparse: true
     },
-    // NUEVO: Para controlar si el QR del evento ya se usó al máximo
     qr_agotado: {
         type: Boolean,
         default: false
     },
-    // NUEVO: Para saber si es un evento con QR compartido
     es_qr_compartido: {
         type: Boolean,
         default: true

@@ -139,9 +139,6 @@ export const validateCreateSurcharge = [
     validateRequest
 ];
 
-// financeValidation.js - Agregar:
-
-
 // En financeValidation.js
 export const validateManualPayment = [
     body('residente_id')

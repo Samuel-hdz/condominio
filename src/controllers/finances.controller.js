@@ -104,7 +104,7 @@ export const financesController = {
     uploadPaymentReceipt: catchAsync(async (req, res) => {
     const residenteId = req.residenteId;
     const {
-        cargo_domicilio_id,  // ← NUEVO: ID del cargo específico
+        cargo_domicilio_id,
         monto_total,
         fecha_pago,
         metodo_pago,
@@ -174,8 +174,39 @@ export const financesController = {
         estatus: 'pendiente'
     });
 
-    // 6. Notificar administradores (igual que antes)
-    // ... código existente ...
+    const administradores = await UserRole.find({ 
+    role: 'administrador' 
+}).populate('user_id');
+
+for (const admin of administradores) {
+    try {
+        await NotificationService.sendNotification({
+            userId: admin.user_id._id,
+            tipo: 'in_app',
+            titulo: '📄 Nuevo comprobante pendiente',
+            mensaje: `${residente.user_id?.nombre || 'Residente'} subió un comprobante de ${Utils.formatCurrency(comprobante.monto_total)} para ${cargoDomicilio.cargo_id.nombre}`,
+            data: {
+                tipo: 'comprobante_pendiente',
+                action: 'review',
+                comprobante_id: comprobante._id.toString(), 
+                residente_id: residenteId.toString(),  
+                cargo_id: cargoDomicilio.cargo_id._id.toString(), 
+                monto: comprobante.monto_total.toString(), 
+                fecha_subida: new Date().toISOString()
+            },
+            accionRequerida: true,
+            accionTipo: 'ver_comprobante',
+            accionData: { 
+                comprobanteId: comprobante._id.toString(),
+                action: 'review' 
+            }
+        });
+        
+        console.log(`📨 Notificación enviada al administrador: ${admin.user_id.email}`);
+    } catch (notifError) {
+        console.warn(`⚠️ Error notificando al administrador ${admin.user_id.email}:`, notifError.message);
+    }
+}
 
     res.status(201).json({
         success: true,
@@ -701,24 +732,24 @@ export const financesController = {
                     console.log('📨 Enviando notificación al residente...');
                     
                     await NotificationService.sendNotification({
-    userId: residente.user_id._id,
-    tipo: 'push',
-    titulo: '💰 Pago registrado',
-    mensaje: `Se registró un pago de ${Utils.formatCurrency(montoNum)} en tu cuenta`,
-    data: {
-        tipo: 'pago',
-        comprobante_id: comprobante[0]._id,
-        folio: comprobante[0].folio,
-        monto: montoNum,
-        action: 'descargar_comprobante'
-    },
-    accionRequerida: true,
-    accionTipo: 'descargar_comprobante',
-    accionData: { 
-        comprobanteId: comprobante[0]._id,
-        pdfUrl: comprobante[0].comprobante_final_url 
-    }
-});
+                        userId: residente.user_id._id,
+                        tipo: 'push',
+                        titulo: '💰 Pago registrado',
+                        mensaje: `Se registró un pago de ${Utils.formatCurrency(montoNum)} en tu cuenta`,
+                        data: {
+                            tipo: 'pago',
+                            comprobante_id: comprobante[0]._id.toString(), 
+                            folio: comprobante[0].folio || '',
+                            monto: montoNum.toString(), 
+                            action: 'descargar_comprobante'
+                        },
+                        accionRequerida: true,
+                        accionTipo: 'descargar_comprobante',
+                        accionData: { 
+                            comprobanteId: comprobante[0]._id.toString(),
+                            pdfUrl: comprobante[0].comprobante_final_url || '' 
+                        }
+                    });
                     
                     notificacionEnviada = true;
                     console.log('✅ Notificación enviada');
@@ -1196,10 +1227,10 @@ export const financesController = {
                 data: {
                     tipo: 'estado_cuenta',
                     action: 'notified',
-                    total_cargos: cargosDomicilio.length,
-                    total_pendiente: totalPendiente,
-                    cargos_vencidos: cargosVencidos,
-                    fecha_notificacion: new Date()
+                    total_cargos: cargosDomicilio.length.toString(),
+                    total_pendiente: totalPendiente.toString(),
+                    cargos_vencidos: cargosVencidos.toString(),
+                    fecha_notificacion: new Date().toISOString()
                 },
                 accionRequerida: true,
                 accionTipo: 'ver_estado_cuenta'

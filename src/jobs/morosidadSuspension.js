@@ -79,8 +79,8 @@ const enviarNotificacionesSegunDias = async (morosidad, dias) => {
             data: { 
                 tipo: 'morosidad', 
                 action: 'morosidad_recordatorio',
-                dias_morosidad: dias,
-                monto_adeudado: morosidad.monto_adeudado
+                dias_morosidad: dias.toString(),
+                monto_adeudado: morosidad.monto_adeudado.toString() 
             }
         });
         
@@ -133,15 +133,15 @@ const suspenderMorososMayor60Dias = async () => {
                     tipo: 'morosidad', 
                     action: 'suspended_auto',
                     motivo: 'Morosidad automática (>60 días)',
-                    fecha_suspension: new Date(),
-                    monto_adeudado: morosidad.monto_adeudado
+                    fecha_suspension: new Date().toISOString(), 
+                    monto_adeudado: morosidad.monto_adeudado.toString()
                 }
             });
             
             console.log(`✅ Residente suspendido: ${residente._id}`);
             
         } catch (error) {
-            console.error(`❌ Error suspendiendo residente ${morosidad.residente_id}:`, error);
+            console.error(`Error suspendiendo residente ${morosidad.residente_id}:`, error);
         }
     }
 };

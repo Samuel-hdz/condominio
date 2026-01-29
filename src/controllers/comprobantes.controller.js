@@ -365,17 +365,18 @@ try {
                     data: {
                         tipo: 'comprobante',
                         action: 'approved',
-                        comprobante_id: comprobante._id,
-                        comprobante_url: comprobante.comprobante_final_url,
-                        folio: comprobante.folio,
-                        monto_total: comprobante.monto_total,
-                        fecha_aprobacion: comprobante.fecha_aprobacion
+                        comprobante_id: comprobante._id.toString(),
+                        comprobante_url: comprobante.comprobante_final_url || '',
+                        folio: comprobante.folio || '',
+                        monto_total: comprobante.monto_total.toString(),
+                        fecha_aprobacion: comprobante.fecha_aprobacion ? 
+                            comprobante.fecha_aprobacion.toISOString() : new Date().toISOString()
                     },
                     accionRequerida: true,
                     accionTipo: 'descargar_comprobante',
                     accionData: { 
-                        comprobanteId: comprobante._id,
-                        pdfUrl: comprobante.comprobante_final_url 
+                        comprobanteId: comprobante._id.toString(),
+                        pdfUrl: comprobante.comprobante_final_url || '' 
                     }
                 });
                 
@@ -507,14 +508,14 @@ try {
                 data: {
                     tipo: 'comprobante',
                     action: 'rejected',
-                    comprobante_id: comprobante._id,
-                    motivo: motivo_rechazo,
-                    monto: comprobante.monto_total,
-                    fecha_rechazo: new Date()
+                    comprobante_id: comprobante._id.toString(),
+                    motivo: motivo_rechazo || 'Sin motivo especificado',
+                    monto: comprobante.monto_total.toString(),
+                    fecha_rechazo: new Date().toISOString()
                 },
                 accionRequerida: true,
                 accionTipo: 'ver_comprobante',
-                accionData: { comprobanteId: comprobante._id }
+                accionData: { comprobanteId: comprobante._id.toString() } 
             });
         }
 

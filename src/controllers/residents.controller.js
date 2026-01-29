@@ -117,8 +117,8 @@ export const residentsController = {
             data: { 
                 tipo: 'resident', 
                 action: 'registered',
-                residente_id: residente._id,
-                es_principal 
+                residente_id: residente._id.toString(), 
+                es_principal: es_principal.toString() 
             }
         });
 
@@ -381,7 +381,7 @@ export const residentsController = {
                 data: { 
                     tipo: 'resident', 
                     action: 'status_changed',
-                    nuevo_estatus: estatus 
+                    nuevo_estatus: estatus || 'inactivo'
                 }
             });
         }
@@ -559,7 +559,7 @@ export const residentsController = {
             data: { 
                 tipo: 'resident', 
                 action: 'added_by_principal',
-                residente_principal: residentePrincipal.user_id.nombre
+                residente_principal: residentePrincipal.user_id.nombre  // ✅ Ya es string
             }
         });
 
@@ -572,7 +572,7 @@ export const residentsController = {
             data: { 
                 tipo: 'resident', 
                 action: 'user_created',
-                nuevo_usuario: user._id 
+                nuevo_usuario: user._id.toString() 
             }
         });
 
@@ -896,10 +896,10 @@ export const residentsController = {
                 data: { 
                     tipo: 'morosidad', 
                     action: 'suspended_manual',
-                    motivo,
-                    fecha_suspension: new Date(),
-                    monto_adeudado: morosidad.monto_adeudado,
-                    dias_morosidad: morosidad.dias_morosidad
+                    motivo: motivo || 'Sin motivo especificado',
+                    fecha_suspension: new Date().toISOString(), 
+                    monto_adeudado: morosidad.monto_adeudado.toString(), 
+                    dias_morosidad: morosidad.dias_morosidad.toString() 
                 }
             });
 
@@ -1000,8 +1000,8 @@ export const residentsController = {
                     data: { 
                         tipo: 'morosidad', 
                         action: 'suspended_mass',
-                        motivo,
-                        monto_adeudado: morosidad.monto_adeudado
+                        motivo: motivo || 'Sin motivo especificado',
+                        monto_adeudado: morosidad.monto_adeudado.toString()
                     }
                 });
 
@@ -1142,8 +1142,8 @@ export const residentsController = {
                     data: { 
                         tipo: 'morosidad', 
                         action: 'updated',
-                        monto_anterior: montoAnterior,
-                        monto_nuevo: monto_adeudado
+                        monto_anterior: montoAnterior.toString(), 
+                        monto_nuevo: monto_adeudado.toString() 
                     }
                 });
             }

@@ -79,11 +79,11 @@ comiteMiembroSchema.post('save', async function(doc) {
                     );
                 }
                 
-                console.log(`✅ Rol y permisos asignados al miembro del comité: ${residente.user_id.nombre}`);
+                console.log(`Rol y permisos asignados al miembro del comité: ${residente.user_id.nombre}`);
             }
         }
     } catch (error) {
-        console.error('❌ Error al asignar rol y permisos al miembro del comité:', error);
+        console.error('Error al asignar rol y permisos al miembro del comité:', error);
     }
 });
 

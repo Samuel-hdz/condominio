@@ -161,6 +161,8 @@ export const authController = {
         const userRoles = await UserRole.find({ user_id: user._id });
         const roleNames = userRoles.map(r => r.role);
 
+        console.log(roleNames)
+
         // Solo estos roles pueden usar login web
         const allowedWebRoles = ['administrador', 'caseta', 'comite'];
         const hasWebRole = roleNames.some(role => allowedWebRoles.includes(role));
