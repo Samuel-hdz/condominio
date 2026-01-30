@@ -100,6 +100,12 @@ export const visitsController = {
             fechaFin = new Date(fecha_fin_vigencia);
         }
 
+        let limiteIngresosFinal = limite_ingresos;
+
+        if (tipoVisita.nombre === 'visitante_vip') {
+            limiteIngresosFinal = 999;
+        }
+
         // Crear autorización
         const autorizacionData = {
             residente_id: residenteId,
@@ -113,7 +119,7 @@ export const visitsController = {
             fecha_fin_vigencia: fechaFin,
             es_visita_unica,
             fecha_visita_unica: es_visita_unica ? fechaInicio : null,
-            limite_ingresos,
+            limite_ingresos: limiteIngresosFinal,
             ingresos_disponibles: limite_ingresos,
             usuario_creador_id: req.userId
         };
@@ -330,7 +336,7 @@ export const visitsController = {
         }
 
         // Verificar que el residente es el dueño de la autorización
-        if (autorizacion.residente_id.toString() !== req.residenteId) {
+        if (autorizacion.residente_id.toString() !== req.residenteId.toString()) {
             return res.status(403).json({
                 success: false,
                 message: 'No tienes permisos para modificar esta autorización'
@@ -402,7 +408,7 @@ export const visitsController = {
         }
 
         // Verificar que el residente es el dueño de la autorización
-        if (autorizacion.residente_id.toString() !== req.residenteId) {
+        if (autorizacion.residente_id.toString() !== req.residenteId.toString()) {
             return res.status(403).json({
                 success: false,
                 message: 'No tienes permisos para cancelar esta autorización'
@@ -480,9 +486,9 @@ export const visitsController = {
                     }
                     throw new Error('Formato de QR no válido');
                 }
-                
+                console.log("first")
                 qrResult = QRService.validateQRPayload(payload);
-                
+                console.log(qrResult)
                 if (!qrResult.valid) {
                     return res.status(400).json({
                         success: false,

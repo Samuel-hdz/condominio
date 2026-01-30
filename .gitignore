@@ -14,6 +14,12 @@ out/
 *.swp
 *.swo
 
+.env
+src/config/firebase-key.json
+
+./scripts/test-firebase.js
+scripts/test-notifications.js
+
 # Cachés
 .cache/
 .npm/

@@ -316,6 +316,14 @@ export const eventsController = {
             });
         }
 
+        if (evento.es_qr_compartido) {
+            return res.status(400).json({
+                success: false,
+                message: 'No se pueden crear invitaciones individuales para eventos con QR compartido. Todos los invitados deben usar el mismo QR del evento.',
+                codigo_error: 'EVENTO_QR_COMPARTIDO'
+            });
+        }
+
         // Verificar límite de invitados
         if (!evento.puedeAceptarInvitado()) {
             return res.status(400).json({
