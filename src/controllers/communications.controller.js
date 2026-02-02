@@ -8,6 +8,7 @@ import { CalleTorre } from '../models/calleTorre.model.js';
 import { catchAsync } from '../middlewares/errorHandler.js';
 import NotificationService from '../libs/notifications.js';
 import Utils from '../libs/utils.js';
+import mongoose from 'mongoose';
 
 export const communicationsController = {
     /**
@@ -380,6 +381,10 @@ export const communicationsController = {
      * Crear nueva publicación/boletín
      */
     createPublication: catchAsync(async (req, res) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
         const { 
             titulo, 
             contenido, 
@@ -392,8 +397,8 @@ export const communicationsController = {
             destinatarios 
         } = req.body;
 
-        // Crear publicación
-        const publicacion = await Publicacion.create({
+        // 1. Crear publicación
+        const [publicacion] = await Publicacion.create([{
             usuario_id: req.userId,
             titulo,
             contenido,
@@ -404,23 +409,26 @@ export const communicationsController = {
             fecha_programada: programado && fecha_programada ? new Date(fecha_programada) : null,
             prioridad,
             notificaciones_enviadas: false
-        });
+        }], { session });
 
-        // Crear destinatarios
+        // 2. Crear destinatarios
         if (destinatarios && Array.isArray(destinatarios)) {
-            for (const dest of destinatarios) {
-                await DestinatarioPublicacion.create({
-                    publicacion_id: publicacion._id,
-                    tipo_destino: dest.tipo,
-                    calle_torre_id: dest.calle_torre_id,
-                    domicilio_id: dest.domicilio_id
-                });
-            }
+            const destinatariosDocs = destinatarios.map(dest => ({
+                publicacion_id: publicacion._id,
+                tipo_destino: dest.tipo,
+                calle_torre_id: dest.calle_torre_id,
+                domicilio_id: dest.domicilio_id
+            }));
+
+            await DestinatarioPublicacion.create(destinatariosDocs, { session });
         }
 
-        // Si no está programado, enviar notificaciones inmediatamente
+        await session.commitTransaction();
+        session.endSession();
+
+        // 3. Enviar notificaciones (FUERA de la transacción)
         if (!programado) {
-            await this.sendPublicationNotifications(publicacion._id);
+            await communicationsController.sendPublicationNotifications(publicacion._id);
         }
 
         res.status(201).json({
@@ -428,84 +436,82 @@ export const communicationsController = {
             message: 'Publicación creada exitosamente',
             publicacion
         });
-    }),
+
+    } catch (error) {
+        await session.abortTransaction();
+        session.endSession();
+        throw error;
+    }
+}),
+
 
     /**
      * Helper para enviar notificaciones de publicación
      */
     sendPublicationNotifications: async (publicacionId) => {
-        const publicacion = await Publicacion.findById(publicacionId);
-        if (!publicacion) return;
+    const publicacion = await Publicacion.findById(publicacionId);
+    if (!publicacion || publicacion.notificaciones_enviadas) return;
 
-        const destinatarios = await DestinatarioPublicacion.find({ 
-            publicacion_id: publicacionId 
-        });
+    const destinatarios = await DestinatarioPublicacion.find({ 
+        publicacion_id: publicacionId 
+    });
 
-        // Obtener todos los residentes que deben recibir la publicación
-        let residentesIds = [];
+    let residentesIds = [];
 
-        for (const dest of destinatarios) {
-            switch (dest.tipo_destino) {
-                case 'todos':
-                    // Todos los residentes activos
-                    const todosResidentes = await Residente.find({ estatus: 'activo' })
-                        .distinct('user_id');
-                    residentesIds.push(...todosResidentes);
-                    break;
+    for (const dest of destinatarios) {
+        switch (dest.tipo_destino) {
+            case 'todos': {
+                const ids = await Residente.find({ estatus: 'activo' })
+                    .distinct('user_id');
+                residentesIds.push(...ids);
+                break;
+            }
+            case 'calle': {
+                const domicilios = await Domicilio.find({
+                    calle_torre_id: dest.calle_torre_id
+                }).distinct('_id');
 
-                case 'calle':
-                    // Residentes de una calle/torre específica
-                    const domiciliosCalle = await Domicilio.find({ 
-                        calle_torre_id: dest.calle_torre_id 
-                    }).distinct('_id');
-                    
-                    const residentesCalle = await Residente.find({
-                        domicilio_id: { $in: domiciliosCalle },
-                        estatus: 'activo'
-                    }).distinct('user_id');
-                    
-                    residentesIds.push(...residentesCalle);
-                    break;
+                const ids = await Residente.find({
+                    domicilio_id: { $in: domicilios },
+                    estatus: 'activo'
+                }).distinct('user_id');
 
-                case 'domicilio':
-                    // Residentes de un domicilio específico
-                    const residentesDomicilio = await Residente.find({
-                        domicilio_id: dest.domicilio_id,
-                        estatus: 'activo'
-                    }).distinct('user_id');
-                    
-                    residentesIds.push(...residentesDomicilio);
-                    break;
+                residentesIds.push(...ids);
+                break;
+            }
+            case 'domicilio': {
+                const ids = await Residente.find({
+                    domicilio_id: dest.domicilio_id,
+                    estatus: 'activo'
+                }).distinct('user_id');
+
+                residentesIds.push(...ids);
+                break;
             }
         }
+    }
 
-        // Eliminar duplicados
-        residentesIds = [...new Set(residentesIds)];
+    residentesIds = [...new Set(residentesIds)];
 
-        // Enviar notificaciones
-        for (const residenteUserId of residentesIds) {
-            await NotificationService.sendNotification({
-                userId: residenteUserId,
+    await Promise.allSettled(
+        residentesIds.map(userId =>
+            NotificationService.sendNotification({
+                userId,
                 tipo: 'push',
                 titulo: '📢 Nuevo boletín',
                 mensaje: publicacion.titulo,
                 data: {
                     tipo: 'boletin',
-                    titulo: publicacion.titulo,
-                    contenidoPreview: publicacion.contenido.length > 100 
-                        ? publicacion.contenido.substring(0, 100) + '...' 
-                        : publicacion.contenido,
-                    publicacionId: publicacion._id.toString(),
-                    tipo_publicacion: publicacion.tipo,
-                    action: 'ver_boletin'
+                    publicacionId: publicacion._id.toString()
                 }
-            });
-        }
+            })
+        )
+    );
 
-        // Marcar como notificada
-        publicacion.notificaciones_enviadas = true;
-        await publicacion.save();
-    },
+    publicacion.notificaciones_enviadas = true;
+    await publicacion.save();
+},
+
 
     /**
      * Obtener publicaciones para un residente

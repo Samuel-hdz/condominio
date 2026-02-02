@@ -60,17 +60,20 @@ publicacionSchema.index({ tipo: 1 });
 publicacionSchema.index({ prioridad: 1 });
 
 // Validar fechas de programación
-publicacionSchema.pre('save', function (next) {
+publicacionSchema.pre('save', function () {
     if (this.programado && !this.fecha_programada) {
-        return next(new Error('Las publicaciones programadas requieren fecha_programada'));
+        throw new Error('Las publicaciones programadas requieren fecha_programada');
     }
 
-    if (this.fecha_expiracion && this.fecha_expiracion <= this.fecha_publicacion) {
-        return next(new Error('La fecha de expiración debe ser posterior a la fecha de publicación'));
+    if (
+        this.fecha_expiracion &&
+        this.fecha_publicacion &&
+        this.fecha_expiracion <= this.fecha_publicacion
+    ) {
+        throw new Error('La fecha de expiración debe ser posterior a la fecha de publicación');
     }
-
-    next();
 });
+
 
 
 export const Publicacion = mongoose.model('Publicacion', publicacionSchema);

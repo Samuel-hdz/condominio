@@ -7,6 +7,7 @@ import {
     validatePublication,
     validateObjectId 
 } from '../middlewares/index.js';
+import PublicacionesProgramadasJob from '../jobs/publicacionesProgramadas.js';
 
 const router = Router();
 
@@ -117,5 +118,29 @@ router.post(
 
 // Combinar rutas
 router.use('/resident', residentRoutes);
+
+// ========== RUTAS PARA PUBLICACIONES PROGRAMADAS ==========
+
+/**
+ * @route   POST /api/communications/publicaciones-programadas/forzar
+ * @desc    Forzar envío de publicaciones programadas (testing)
+ * @access  Private (Administrador)
+ */
+router.post(
+    '/publicaciones-programadas/forzar',
+    requireRole('administrador'),
+    PublicacionesProgramadasJob.forzarEnvio.bind(PublicacionesProgramadasJob)
+);
+
+/**
+ * @route   GET /api/communications/publicaciones-programadas/estado
+ * @desc    Obtener estado de publicaciones programadas
+ * @access  Private (Administrador, Comité)
+ */
+router.get(
+    '/publicaciones-programadas/estado',
+    requireRole('administrador', 'comite'),
+    PublicacionesProgramadasJob.obtenerEstado.bind(PublicacionesProgramadasJob)
+);
 
 export default router;

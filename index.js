@@ -3,6 +3,7 @@ import { connectDB } from './db.js';
 import RecurrentChargesJob from './src/jobs/recurrentCharges.js';
 import SurchargesJob from './src/jobs/surcharges.js';
 import { iniciarJobMorosidad } from './src/jobs/morosidadSuspension.js';
+import PublicacionesProgramadasJob from './src/jobs/publicacionesProgramadas.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -15,13 +16,16 @@ connectDB().then(() => {
     RecurrentChargesJob.setup();
     SurchargesJob.setup();
     iniciarJobMorosidad();
+    PublicacionesProgramadasJob.setup();
     
     // Iniciar servidor
     app.listen(PORT, () => {
         console.log(`Servidor corriendo en puerto ${PORT}`);
         console.log(`Jobs programados iniciados:`);
-        //console.log(`• Cargos recurrentes: 00:05 diario`);
-        //console.log(`• Recargos automáticos: 02:00 diario`);
+        console.log(`• Cargos recurrentes: diario`);
+        console.log(`• Recargos automáticos: diario`);
+        console.log(`• Morosidad: verificación diaria`);
+        console.log(`• Publicaciones programadas: cada 5 minutos`);
     });
 }).catch(err => {
     console.error('Error iniciando aplicación:', err);
