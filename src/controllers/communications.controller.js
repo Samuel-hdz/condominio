@@ -390,7 +390,6 @@ export const communicationsController = {
             contenido, 
             tipo = 'boletin', 
             adjunto_url,
-            fecha_expiracion,
             programado = false,
             fecha_programada,
             prioridad = 'normal',
@@ -404,7 +403,6 @@ export const communicationsController = {
             contenido,
             tipo,
             adjunto_url,
-            fecha_expiracion: fecha_expiracion ? new Date(fecha_expiracion) : null,
             programado,
             fecha_programada: programado && fecha_programada ? new Date(fecha_programada) : null,
             prioridad,
@@ -545,8 +543,7 @@ export const communicationsController = {
                 $in: (await DestinatarioPublicacion.find({ 
                     tipo_destino: 'todos' 
                 })).map(p => p.publicacion_id)
-            },
-            fecha_expiracion: { $gte: new Date() } // No expiradas
+            }
         });
 
         // 2. Publicaciones para su calle/torre

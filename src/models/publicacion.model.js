@@ -29,9 +29,6 @@ const publicacionSchema = new mongoose.Schema({
         type: Date,
         default: Date.now
     },
-    fecha_expiracion: {
-        type: Date
-    },
     programado: {
         type: Boolean,
         default: false
@@ -55,7 +52,6 @@ const publicacionSchema = new mongoose.Schema({
 // Índices
 publicacionSchema.index({ fecha_publicacion: -1 });
 publicacionSchema.index({ programado: 1 });
-publicacionSchema.index({ fecha_expiracion: 1 });
 publicacionSchema.index({ tipo: 1 });
 publicacionSchema.index({ prioridad: 1 });
 
@@ -63,14 +59,6 @@ publicacionSchema.index({ prioridad: 1 });
 publicacionSchema.pre('save', function () {
     if (this.programado && !this.fecha_programada) {
         throw new Error('Las publicaciones programadas requieren fecha_programada');
-    }
-
-    if (
-        this.fecha_expiracion &&
-        this.fecha_publicacion &&
-        this.fecha_expiracion <= this.fecha_publicacion
-    ) {
-        throw new Error('La fecha de expiración debe ser posterior a la fecha de publicación');
     }
 });
 
