@@ -646,26 +646,42 @@ if (accesoPermitido && tipoNombre === 'personal' && autorizacion.personal_id) {
         // Enviar notificación al residente
         if (residente && residente.user_id) {
             const nombreVisitante = autorizacion.nombre_visitante || 
-                                   autorizacion.proveedor_id?.nombre ||
-                                   autorizacion.personal_id?.nombre ||
+                                   (await Proveedor.findById(autorizacion.proveedor_id))?.nombre ||
+                                   (await Personal.findById(autorizacion.personal_id))?.nombre ||
                                    'Invitado';
             
+            // Determinar el título según el estado
+            let titulo;
+            if (accesoPermitido) {
+                titulo = 'Visitante ingresó';
+            } else {
+                titulo = 'Acceso denegado';
+            }
+
             await NotificationService.sendNotification({
                 userId: residente.user_id._id,
                 tipo: 'push',
-                titulo: '🚪 Visitante en acceso',
-                mensaje: `${nombreVisitante} está intentando ingresar`,
+                titulo: `${titulo}`,
+                mensaje: accesoPermitido 
+                    ? `${nombreVisitante} acaba de ingresar` 
+                    : `Acceso denegado a ${nombreVisitante}: ${motivoDenegacion}`,
                 data: {
-                    tipo: 'visita',
-                    nombreVisitante: nombreVisitante || 'Visitante',
-                    tipoVisita: tipoNombre || 'Visita',
-                    hora: Utils.formatDate(ahora, true),
-                    permitido: accesoPermitido.toString(),
+                    tipo: 'visita_ingreso',
+                    action: 'ver_visitas_actuales',
+                    nombreVisitante: nombreVisitante,
+                    tipoVisita: tipoNombre,
+                    hora: ahora.toISOString(),
+                    permitido: accesoPermitido,
                     visitaId: autorizacion._id.toString(),
-                    motivoDenegacion: motivoDenegacion || '',
-                    action: 'ver_visita'
+                    registroId: registroAcceso._id.toString(),
+                    motivoDenegacion: motivoDenegacion || null
                 },
-                accionRequerida: false
+                accionRequerida: false,
+                accionTipo: 'ver_visita',
+                accionData: { 
+                    autorizacionId: autorizacion._id.toString(),
+                    registroId: registroAcceso._id.toString()
+                }
             });
         }
 
@@ -855,7 +871,10 @@ if (accesoPermitido && tipoNombre === 'personal' && autorizacion.personal_id) {
     registerVisitExit: catchAsync(async (req, res) => {
         const { registro_id } = req.body;
 
-        const registro = await RegistroAcceso.findById(registro_id);
+        const registro = await RegistroAcceso.findById(registro_id)
+            .populate('autorizacion_id')
+            .populate('residente_id');
+
         if (!registro) {
             return res.status(404).json({
                 success: false,
@@ -872,14 +891,163 @@ if (accesoPermitido && tipoNombre === 'personal' && autorizacion.personal_id) {
         }
 
         // Registrar salida
-        registro.fecha_hora_salida = new Date();
+        const horaSalida = new Date();
+        registro.fecha_hora_salida = horaSalida;
         registro.estado = 'finalizado';
         await registro.save();
+
+        // Calcular tiempo de estancia
+        const tiempoIngreso = new Date(registro.fecha_hora_ingreso);
+        const minutosDentro = Math.floor((horaSalida - tiempoIngreso) / (1000 * 60));
+        const horasDentro = Math.floor(minutosDentro / 60);
+        const minutosRestantes = minutosDentro % 60;
+
+        // NOTIFICACIÓN DE SALIDA
+        
+        if (registro.residente_id) {
+            const residente = await Residente.findById(registro.residente_id)
+                .populate('user_id');
+
+            if (residente && residente.user_id) {
+                const nombreVisitante = registro.nombre_visitante || 'Visitante';
+                
+                // Formatear tiempo de estancia
+                let tiempoTexto;
+                if (horasDentro > 0) {
+                    tiempoTexto = `${horasDentro}h ${minutosRestantes}m`;
+                } else {
+                    tiempoTexto = `${minutosDentro} minutos`;
+                }
+
+                await NotificationService.sendNotification({
+                    userId: residente.user_id._id,
+                    tipo: 'push',
+                    titulo: '👋 Visitante salió',
+                    mensaje: `${nombreVisitante} acaba de salir. Estuvo ${tiempoTexto}`,
+                    data: {
+                        tipo: 'visita_salida',
+                        action: 'ver_historial_visitas',
+                        nombreVisitante: nombreVisitante,
+                        tipoVisita: registro.tipo_acceso,
+                        hora_ingreso: registro.fecha_hora_ingreso.toISOString(),
+                        hora_salida: horaSalida.toISOString(),
+                        tiempo_estancia: {
+                            minutos: minutosDentro,
+                            horas: horasDentro,
+                            texto: tiempoTexto
+                        },
+                        registroId: registro._id.toString(),
+                        autorizacionId: registro.autorizacion_id?._id?.toString()
+                    },
+                    accionRequerida: false
+                });
+            }
+        }
 
         res.json({
             success: true,
             message: 'Salida registrada exitosamente',
-            registro
+            registro: {
+                id: registro._id,
+                nombre_visitante: registro.nombre_visitante,
+                fecha_hora_ingreso: registro.fecha_hora_ingreso,
+                fecha_hora_salida: registro.fecha_hora_salida,
+                tiempo_estancia: {
+                    minutos: minutosDentro,
+                    horas: horasDentro,
+                    texto: horasDentro > 0 
+                        ? `${horasDentro}h ${minutosRestantes}m`
+                        : `${minutosDentro} minutos`
+                }
+            }
+        });
+    }),
+
+    /**
+     * Obtener visitas del residente que están actualmente dentro del condominio
+     */
+    getCurrentVisits: catchAsync(async (req, res) => {
+        const residenteId = req.residenteId;
+
+        // Buscar registros de acceso que:
+        // 1. Pertenecen a este residente
+        // 2. Estado es 'permitido' (acceso autorizado)
+        // 3. No tienen fecha de salida (aún están dentro)
+        const visitasActuales = await RegistroAcceso.find({
+            residente_id: residenteId,
+            estado: 'permitido',
+            fecha_hora_salida: null  // No han salido
+        })
+        .populate('autorizacion_id', 'tipo_visita_id nombre_visitante telefono_visitante')
+        .populate({
+            path: 'autorizacion_id',
+            populate: [
+                {
+                    path: 'tipo_visita_id',
+                    select: 'nombre descripcion'
+                },
+                {
+                    path: 'proveedor_id',
+                    select: 'nombre servicio empresa'
+                },
+                {
+                    path: 'personal_id',
+                    select: 'nombre tipo_servicio'
+                }
+            ]
+        })
+        .sort({ fecha_hora_ingreso: -1 });
+
+        // Formatear respuesta con información útil
+        const visitasFormateadas = visitasActuales.map(visita => {
+            const ahora = new Date();
+            const ingreso = new Date(visita.fecha_hora_ingreso);
+            const minutosDentro = Math.floor((ahora - ingreso) / (1000 * 60));
+
+            // Determinar el nombre del visitante según el tipo
+            let nombreVisitante = visita.nombre_visitante;
+            if (visita.autorizacion_id) {
+                if (visita.autorizacion_id.proveedor_id) {
+                    nombreVisitante = visita.autorizacion_id.proveedor_id.nombre;
+                } else if (visita.autorizacion_id.personal_id) {
+                    nombreVisitante = visita.autorizacion_id.personal_id.nombre;
+                }
+            }
+
+            return {
+                registro_id: visita._id,
+                autorizacion_id: visita.autorizacion_id?._id,
+                nombre_visitante: nombreVisitante,
+                telefono_visitante: visita.autorizacion_id?.telefono_visitante,
+                tipo_visita: visita.autorizacion_id?.tipo_visita_id?.nombre || visita.tipo_acceso,
+                tipo_visita_descripcion: visita.autorizacion_id?.tipo_visita_id?.descripcion,
+                fecha_hora_ingreso: visita.fecha_hora_ingreso,
+                tiempo_dentro: {
+                    minutos: minutosDentro,
+                    horas: Math.floor(minutosDentro / 60),
+                    texto: minutosDentro < 60 
+                        ? `${minutosDentro} minutos`
+                        : `${Math.floor(minutosDentro / 60)}h ${minutosDentro % 60}m`
+                },
+                metodo_acceso: visita.metodo_acceso,
+                observaciones: visita.observaciones,
+                // Información adicional según el tipo
+                detalles_adicionales: visita.autorizacion_id?.proveedor_id ? {
+                    tipo: 'proveedor',
+                    servicio: visita.autorizacion_id.proveedor_id.servicio,
+                    empresa: visita.autorizacion_id.proveedor_id.empresa
+                } : visita.autorizacion_id?.personal_id ? {
+                    tipo: 'personal',
+                    tipo_servicio: visita.autorizacion_id.personal_id.tipo_servicio
+                } : null
+            };
+        });
+
+        res.json({
+            success: true,
+            visitas_actuales: visitasFormateadas,
+            total: visitasFormateadas.length,
+            timestamp: new Date()
         });
     }),
 

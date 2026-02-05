@@ -121,6 +121,17 @@ residentRoutes.get(
     visitsController.getVisitStatistics
 );
 
+
+/**
+ * @route   GET /api/visits/resident/current
+ * @desc    Obtener visitas que están actualmente dentro del condominio
+ * @access  Private (Residente)
+ */
+residentRoutes.get(
+    '/current',
+    visitsController.getCurrentVisits
+);
+
 // Rutas para caseta
 const casetaRoutes = Router();
 casetaRoutes.use(requireCasetaAccess);
