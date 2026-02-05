@@ -600,15 +600,27 @@ class NotificationService {
      * Obtiene el tipo de notificación basado en los datos
      */
     static getNotificationTypeFromData(data) {
-        if (data.tipo === 'visita') return 'visitas';
-        if (data.tipo === 'pago') return 'pagos';
-        if (data.tipo === 'boletin') return 'boletines';
-        if (data.tipo === 'paquete') return 'paqueteria';
-        if (data.tipo === 'chat') return 'chat';
-        if (data.tipo === 'acceso') return 'accesos';
-        
-        return 'general';
-    }
+    if (data.tipo === 'visita') return 'visitas';
+    if (data.tipo === 'visita_ingreso') return 'visitas';
+    if (data.tipo === 'visita_salida') return 'visitas';
+    
+    // Pagos
+    if (data.tipo === 'pago') return 'pagos';
+    
+    // Boletines
+    if (data.tipo === 'boletin') return 'boletines';
+    
+    // Paquetería
+    if (data.tipo === 'paquete') return 'paqueteria';
+    
+    // Chat
+    if (data.tipo === 'chat') return 'chat';
+    
+    // Accesos
+    if (data.tipo === 'acceso') return 'accesos';
+    
+    return 'general';
+}
 
     /**
      * Helper para crear notificaciones comunes
